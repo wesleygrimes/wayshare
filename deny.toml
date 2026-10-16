@@ -10,6 +10,7 @@ allow = [
 
 [advisories]
 version = 2
+unsound = "all"
 
 [sources]
 unknown-registry = "deny"

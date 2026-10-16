@@ -29,9 +29,10 @@ upgrade, run both again, then `systemctl --user restart wayshare`.
 
 ## mise
 
-[mise](https://mise.jdx.dev) is optional for building, but CI runs these same tasks. It reads the toolchain pin from `rust-toolchain.toml` and pins
-ShellCheck, actionlint, cargo-deny, cocogitto and `bindgen-cli`. Run `mise run setup` once
-to install them and list any missing Linux system packages. It never uses sudo.
+[mise](https://mise.jdx.dev) is optional, but CI runs these same tasks. It reads the
+toolchain pin from `rust-toolchain.toml` and pins ShellCheck, actionlint, cargo-deny,
+cocogitto and `bindgen-cli`. Run `mise run setup` once to install them. Setup lists any
+missing Linux system packages but never uses sudo.
 
 | Task | Does |
 |---|---|
@@ -46,10 +47,10 @@ to install them and list any missing Linux system packages. It never uses sudo.
 | `mise run audit` | cargo-deny: advisories, licenses, sources |
 | `mise run gen-vaapi-sys` | regenerate the libva bindings (Linux) |
 
-`mise run build` used to build the release profile. Use `mise run build --release` for that.
+`mise run build` is now a dev build; pass `--release` for an optimized build.
 
 `audit` downloads the advisory database, so it needs network. `gen-vaapi-sys` needs libva
-headers and clang.  Nothing here needs a live Hyprland session.
+headers and clang. Nothing here needs a live Hyprland session.
 
 ## Bindings
 

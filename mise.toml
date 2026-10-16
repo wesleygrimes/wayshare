@@ -43,7 +43,13 @@ depends = ["fmt:check", "lint", "test"]
 [tasks."check:commits"]
 description = "Validate commit messages in <base>..HEAD"
 usage = 'arg "<base>" help="Git revision to start after, e.g. origin/main"'
-run = 'cog check "${usage_base}..HEAD"'
+run = '''
+cog check "${usage_base}..HEAD"
+if git log --format=%s "${usage_base}..HEAD" | grep -Ev '^[a-z]+(\([^)]+\))?!?: '; then
+  echo "commit types must be lowercase" >&2
+  exit 1
+fi
+'''
 
 [tasks.build]
 description = "Build the dev profile, or the optimized binary with --release"
