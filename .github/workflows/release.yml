@@ -4,17 +4,12 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing tag to rebuild into its draft release, such as v0.1.0
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -23,7 +18,6 @@ jobs:
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       sha: ${{ steps.resolve.outputs.sha }}
-      prerelease: ${{ steps.resolve.outputs.prerelease }}
       public: ${{ steps.resolve.outputs.public }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -34,24 +28,31 @@ jobs:
         id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ github.ref_name }}
         run: |
-          [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::$TAG isn't a vMAJOR.MINOR.PATCH tag"; exit 1; }
+          [ "$GITHUB_REF_TYPE" = tag ] || { echo "::error::run this workflow on a tag (gh workflow run release.yml --ref vX.Y.Z), not $GITHUB_REF"; exit 1; }
+          [[ $TAG =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "::error::$TAG isn't a vMAJOR.MINOR.PATCH tag"; exit 1; }
           version=${TAG#v}
           sha=$(git rev-parse --verify "refs/tags/$TAG^{commit}") || { echo "::error::tag $TAG doesn't exist"; exit 1; }
-          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$sha" != "$GITHUB_SHA" ]; then
-            echo "::error::$TAG resolves to $sha, not the pushed $GITHUB_SHA"; exit 1
+          if [ "$sha" != "$GITHUB_SHA" ]; then
+            echo "::error::$TAG resolves to $sha, not $GITHUB_SHA"; exit 1
           fi
           if gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null | grep -qx false; then
             echo "::error::$TAG is already published; this workflow never touches published releases"; exit 1
           fi
           git show "$sha:Cargo.toml" | grep -qx "version = \"$version\"" || { echo "::error::Cargo.toml isn't at $version in $TAG"; exit 1; }
           git show "$sha:CHANGELOG.md" | grep -q "^## $version " || { echo "::error::CHANGELOG.md has no $version section in $TAG"; exit 1; }
+          if ! public=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private | not'); then
+            echo "::error::couldn't look up the repository visibility"; exit 1
+          fi
+          case $public in
+            true | false) ;;
+            *) echo "::error::unexpected repository visibility '$public'"; exit 1 ;;
+          esac
           {
             echo "tag=$TAG"
             echo "sha=$sha"
-            echo "prerelease=$([[ $version == *-* ]] && echo true || echo false)"
-            echo "public=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private | not')"
+            echo "public=$public"
           } >> "$GITHUB_OUTPUT"
 
   build:
@@ -101,7 +102,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.check.outputs.tag }}
       PUBLIC: ${{ needs.check.outputs.public }}
-      PRERELEASE: ${{ needs.check.outputs.prerelease }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -116,7 +116,7 @@ jobs:
         run: |
           (cd dist && sha256sum -- *.tar.gz > sha256sums.txt)
           version=${TAG#v}
-          awk -v v="$version" '/^## / { on = index($0, "## " v " ") == 1; next } on' CHANGELOG.md > notes.md
+          awk -v v="$version" '/^## [0-9]+\.[0-9]+\.[0-9]+ / { on = index($0, "## " v " ") == 1; next } on' CHANGELOG.md > notes.md
           cat >> notes.md <<EOF
 
           ## Install
@@ -147,7 +147,8 @@ jobs:
         if: env.PUBLIC == 'true'
         run: |
           for archive in dist/*.tar.gz; do
-            gh attestation verify "$archive" -R "$GITHUB_REPOSITORY"
+            gh attestation verify "$archive" -R "$GITHUB_REPOSITORY" \
+              --source-ref "$GITHUB_REF" --source-digest "$GITHUB_SHA"
           done
       - name: Create or update the draft release
         run: |
@@ -157,8 +158,7 @@ jobs:
               echo "::error::$TAG is already published; this workflow never touches published releases"; exit 1 ;;
             draft)
               gh release upload "$TAG" dist/* --clobber
-              gh release edit "$TAG" --title "$TAG" --notes-file notes.md --prerelease="$PRERELEASE" ;;
+              gh release edit "$TAG" --title "$TAG" --notes-file notes.md ;;
             none)
-              gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md \
-                ${PRERELEASE:+--prerelease="$PRERELEASE"} dist/* ;;
+              gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md dist/* ;;
           esac
