@@ -54,6 +54,26 @@ missing Linux system packages but never uses sudo.
 `audit` downloads the advisory database, so it needs network. `gen-vaapi-sys` needs libva
 headers and clang. Nothing here needs a live Hyprland session.
 
+## Build times
+
+Measured 2026-10-16, median of three runs (two for release), `cargo` 1.98.1. Dev builds are
+incremental; release builds are not.
+
+- Mac: Apple M2 Pro, 12 cores, 32 GB, no compiler cache (`kache` disabled).
+- Arch VM: AMD Ryzen 7 6800U, 8 vCPUs, 9.6 GB.
+
+| Machine | Case | Command | Time |
+|---|---|---|---|
+| Mac | cold | `mise run build` | 8.8 s |
+| Mac | no-op | `mise run build` | 0.2 s |
+| Mac | edit `src/rfb/messages.rs` | `mise run build` | 1.1 s |
+| Mac | cold release | `mise run build --release` | 14.5 s |
+| VM | cold | `mise run build` | 18.9 s |
+| VM | no-op | `mise run build` | 0.2 s |
+| VM | edit `src/rfb/messages.rs` | `mise run build` | 1.7 s |
+| VM | edit `src/server_linux.rs` | `mise run build` | 1.7 s |
+| VM | cold release | `mise run build --release` | 30.7 s |
+
 ## Bindings
 
 `src/encode/vaapi/sys.rs` is generated. Regenerate it with `tools/gen-vaapi-sys.sh` rather
