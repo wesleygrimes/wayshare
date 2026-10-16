@@ -26,9 +26,9 @@ Other ways to install:
 
 - With [mise](https://mise.jdx.dev): `mise use -g github:wesleygrimes/wayshare`, then
   `wayshare install-service`
-- From the AUR: `yay -S wayshare`
-- On Omarchy: `omarchy pkg add wayshare`
 - [From source](docs/development.md#installing-from-source)
+
+wayshare isn't on the AUR or in `omarchy pkg` yet. Those packages are coming soon.
 
 ## Set up
 
