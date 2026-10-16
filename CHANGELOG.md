@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.1 - 2026-10-16
+
+First public release.
+
+### Fixes
+
+- VA-API: creating surfaces no longer relies on undefined behavior.
+- x265: a failed encoder restart or picture allocation now returns an error instead of crashing on the next frame.
+
+### Maintenance
+
+- Release binaries are stripped, so downloads are smaller.
+- Contributor guide, issue templates, CI checks, and release tooling.
+
+**Full changelog**: [v0.1.0...v0.1.1](https://github.com/wesleygrimes/wayshare/compare/v0.1.0...v0.1.1)
+
 ## 0.1.0 - 2026-10-15
 
 First release.
