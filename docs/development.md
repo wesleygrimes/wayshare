@@ -75,8 +75,8 @@ incremental; release builds are not.
 | VM | cold release | `mise run build --release` | 30.7 s |
 
 wayshare stays one package. Small edits already rebuild in under 2 s, and Linux-only
-dependencies only compile on Linux, so a workspace split would save little time and would
-make many internal items `pub`.
+dependencies only compile on Linux, so a workspace split would save little and force many
+internal items to be `pub`.
 
 ## Bindings
 
