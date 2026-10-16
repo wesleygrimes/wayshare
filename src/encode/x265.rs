@@ -264,13 +264,17 @@ impl Session {
             bail!("x265: profile {profile:?} rejected");
         }
         // SAFETY: `self.param` is non-null and configured above. The encoder handle is null-
-        // checked before use, and the picture comes from picture_alloc before picture_init.
+        // checked before use, and the picture is null-checked before picture_init. On failure the
+        // handles stay in `self` for `close` to free.
         unsafe {
             self.enc = (api.encoder_open)(self.param);
             if self.enc.is_null() {
                 bail!("x265_encoder_open failed");
             }
             self.pic = (api.picture_alloc)();
+            if self.pic.is_null() {
+                bail!("x265_picture_alloc failed");
+            }
             (api.picture_init)(self.param, self.pic);
         }
         Ok(())
