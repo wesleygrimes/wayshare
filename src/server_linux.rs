@@ -19,6 +19,7 @@ use crate::hp::ratecontrol::{RateConfig, RateController, RateFeedback};
 use crate::hp::rtcp::{self, RtcpEvent};
 use crate::hp::srtp::{self, SrtpContext};
 use crate::rfb::media::{HpBackend, KEY_LEN, MediaAnswer, MediaPorts, MediaStreamConfig};
+use crate::rfb::session::canonical_ip;
 use crate::rfb::{CursorSourceFactory, FrameSourceFactory, SessionId};
 use crate::source::{CursorImage, CursorSource, Frame, FrameSource};
 
@@ -320,7 +321,7 @@ impl HpBackend for LinuxHp {
         };
         let params = MediaParams {
             output: self.output.clone(),
-            peer: canonical(peer.ip()),
+            peer: canonical_ip(peer.ip()),
             port: self.port,
             encoder: self.encoder.clone(),
             fixed_bitrate: self.fixed_bitrate,
@@ -401,13 +402,6 @@ impl HpBackend for LinuxHp {
             video1: v.bytes,
             video2: Vec::new(),
         }))
-    }
-}
-
-fn canonical(ip: IpAddr) -> IpAddr {
-    match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
-        v4 => v4,
     }
 }
 

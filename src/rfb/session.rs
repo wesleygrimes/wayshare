@@ -1018,7 +1018,7 @@ impl Drop for Session {
     }
 }
 
-fn canonical_ip(ip: std::net::IpAddr) -> std::net::IpAddr {
+pub(crate) fn canonical_ip(ip: std::net::IpAddr) -> std::net::IpAddr {
     match ip {
         std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, std::net::IpAddr::V4),
         v4 => v4,
