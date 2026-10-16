@@ -273,7 +273,7 @@ fn main() -> Result<()> {
     let mut t0 = Instant::now();
     let (mut sent, mut octets, mut sent_dons) = (0u32, 0u32, Vec::new());
     let mut switch_pic = usize::MAX;
-    for f in 0..frames {
+    for (f, row) in schedule.iter().enumerate() {
         if switch_at == Some(f) {
             let mut cfg2 =
                 PacketizerConfig::new(ssrc_base, pt, TILES as u8, size2.context("--size2")?);
@@ -293,10 +293,7 @@ fn main() -> Result<()> {
             pk = Packetizer::new(cfg2);
             switch_pic = sent_dons.len();
         }
-        let tiles: Vec<Option<&[u8]>> = schedule[f]
-            .iter()
-            .map(|p| p.map(|i| picture(f, i)))
-            .collect();
+        let tiles: Vec<Option<&[u8]>> = row.iter().map(|p| p.map(|i| picture(f, i))).collect();
         let mut d = pk.next_don();
         for t in &tiles {
             if t.is_some() {

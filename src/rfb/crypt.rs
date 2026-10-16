@@ -46,11 +46,11 @@ impl RecordWriter {
             plain[t - MAC_LEN..].copy_from_slice(&m);
             self.seq = self.seq.wrapping_add(1);
 
-            for block in plain.chunks_exact_mut(16) {
+            for block in plain.as_chunks_mut::<16>().0 {
                 for (b, c) in block.iter_mut().zip(self.chain) {
                     *b ^= c;
                 }
-                self.cipher.encrypt_block(block.try_into().unwrap());
+                self.cipher.encrypt_block(block.into());
                 self.chain.copy_from_slice(block);
             }
             out.extend_from_slice(&(t as u16).to_be_bytes());
@@ -82,9 +82,9 @@ impl RecordReader {
             "bad encrypted record length {t}"
         );
         let mut plain = record.to_vec();
-        for block in plain.chunks_exact_mut(16) {
-            let ct: [u8; 16] = block.try_into().unwrap();
-            self.cipher.decrypt_block(block.try_into().unwrap());
+        for block in plain.as_chunks_mut::<16>().0 {
+            let ct: [u8; 16] = *block;
+            self.cipher.decrypt_block(block.into());
             for (b, c) in block.iter_mut().zip(self.chain) {
                 *b ^= c;
             }
@@ -165,9 +165,9 @@ mod tests {
         let mut plain = wire[2..].to_vec();
         let cipher = Aes128::new((&key).into());
         let mut chain = iv;
-        for block in plain.chunks_exact_mut(16) {
-            let ct: [u8; 16] = block.try_into().unwrap();
-            cipher.decrypt_block(block.try_into().unwrap());
+        for block in plain.as_chunks_mut::<16>().0 {
+            let ct: [u8; 16] = *block;
+            cipher.decrypt_block(block.into());
             block.iter_mut().zip(chain).for_each(|(b, c)| *b ^= c);
             chain = ct;
         }

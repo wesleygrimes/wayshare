@@ -79,15 +79,15 @@ pub struct Credentials {
 
 pub fn ecb_decrypt(key: &[u8; 16], data: &mut [u8]) {
     let cipher = Aes128::new(key.into());
-    for block in data.chunks_exact_mut(16) {
-        cipher.decrypt_block(block.try_into().unwrap());
+    for block in data.as_chunks_mut::<16>().0 {
+        cipher.decrypt_block(block.into());
     }
 }
 
 pub fn ecb_encrypt(key: &[u8; 16], data: &mut [u8]) {
     let cipher = Aes128::new(key.into());
-    for block in data.chunks_exact_mut(16) {
-        cipher.encrypt_block(block.try_into().unwrap());
+    for block in data.as_chunks_mut::<16>().0 {
+        cipher.encrypt_block(block.into());
     }
 }
 

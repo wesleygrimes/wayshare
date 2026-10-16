@@ -78,7 +78,9 @@ fn be32(b: &[u8], o: usize) -> u32 {
 }
 
 fn report_blocks(body: &[u8], count: u8) -> Vec<ReportBlock> {
-    body.chunks_exact(24)
+    body.as_chunks::<24>()
+        .0
+        .iter()
         .take(count.into())
         .map(|b| ReportBlock {
             ssrc: be32(b, 0),
@@ -145,7 +147,9 @@ pub fn parse(buf: &[u8]) -> Result<Vec<RtcpEvent>> {
             PT_SDES => RtcpEvent::Sdes,
             PT_BYE => RtcpEvent::Bye {
                 ssrcs: p[4..]
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .take(count.into())
                     .map(|c| be32(c, 0))
                     .collect(),
