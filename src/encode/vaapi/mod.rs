@@ -1265,15 +1265,28 @@ unsafe fn import_dmabuf(dpy: VADisplay, buf: &DmabufBuffer) -> Result<VASurfaceI
     }
     desc.num_objects = inodes.len() as u32;
 
-    let mut attribs: [VASurfaceAttrib; 2] = unsafe { std::mem::zeroed() };
-    attribs[0].type_ = VASurfaceAttribType::VASurfaceAttribMemoryType;
-    attribs[0].flags = VA_SURFACE_ATTRIB_SETTABLE;
-    attribs[0].value.type_ = VAGenericValueType::VAGenericValueTypeInteger;
-    attribs[0].value.value.i = VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2 as i32;
-    attribs[1].type_ = VASurfaceAttribType::VASurfaceAttribExternalBufferDescriptor;
-    attribs[1].flags = VA_SURFACE_ATTRIB_SETTABLE;
-    attribs[1].value.type_ = VAGenericValueType::VAGenericValueTypePointer;
-    attribs[1].value.value.p = (&mut desc as *mut VADRMPRIMESurfaceDescriptor).cast();
+    let mut attribs = [
+        VASurfaceAttrib {
+            type_: VASurfaceAttribType::VASurfaceAttribMemoryType,
+            flags: VA_SURFACE_ATTRIB_SETTABLE,
+            value: VAGenericValue {
+                type_: VAGenericValueType::VAGenericValueTypeInteger,
+                value: _VAGenericValue__bindgen_ty_1 {
+                    i: VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2 as i32,
+                },
+            },
+        },
+        VASurfaceAttrib {
+            type_: VASurfaceAttribType::VASurfaceAttribExternalBufferDescriptor,
+            flags: VA_SURFACE_ATTRIB_SETTABLE,
+            value: VAGenericValue {
+                type_: VAGenericValueType::VAGenericValueTypePointer,
+                value: _VAGenericValue__bindgen_ty_1 {
+                    p: (&mut desc as *mut VADRMPRIMESurfaceDescriptor).cast(),
+                },
+            },
+        },
+    ];
     let mut surface = VA_INVALID_SURFACE;
     check(
         // SAFETY: `desc` is live and referenced by `attribs[1]` until the call returns, and its
