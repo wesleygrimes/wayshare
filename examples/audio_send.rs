@@ -18,8 +18,12 @@ use wayshare::hp::srtp::{MASTER_LEN, SrtpContext, is_rtcp};
 
 fn json_field(json: &str, key: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(json)?;
-    let f = v.get(key).with_context(|| format!("rx.json has no {key}"))?;
-    Ok(f.as_str().map(str::to_string).unwrap_or_else(|| f.to_string()))
+    let f = v
+        .get(key)
+        .with_context(|| format!("rx.json has no {key}"))?;
+    Ok(f.as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| f.to_string()))
 }
 
 fn base64(s: &str) -> Vec<u8> {
@@ -33,7 +37,10 @@ fn base64(s: &str) -> Vec<u8> {
     let v: Vec<u8> = s.bytes().filter(|&c| c != b'=').map(val).collect();
     v.chunks(4)
         .flat_map(|c| {
-            let n = c.iter().enumerate().fold(0u32, |a, (i, &x)| a | u32::from(x) << (18 - 6 * i));
+            let n = c
+                .iter()
+                .enumerate()
+                .fold(0u32, |a, (i, &x)| a | u32::from(x) << (18 - 6 * i));
             n.to_be_bytes()[1..c.len()].to_vec()
         })
         .collect()
@@ -56,11 +63,27 @@ fn read_aus(path: &str) -> Result<Vec<Vec<u8>>> {
 }
 
 #[cfg(target_os = "linux")]
-fn encode(out: &str, secs: f64, bitrate: u32, freq: f64, dbfs: f64, sbr: bool, bandwidth: u32) -> Result<()> {
+fn encode(
+    out: &str,
+    secs: f64,
+    bitrate: u32,
+    freq: f64,
+    dbfs: f64,
+    sbr: bool,
+    bandwidth: u32,
+) -> Result<()> {
     let amp = 32767.0 * 10f64.powf(dbfs / 20.0);
     use wayshare::audio::fdk::{AacEldEncoder, EncoderConfig};
-    let mut enc = AacEldEncoder::new(&EncoderConfig { bitrate, sbr, bandwidth })?;
-    println!("fdk ASC {:02x?} frame {}", enc.audio_specific_config(), enc.frame_length());
+    let mut enc = AacEldEncoder::new(&EncoderConfig {
+        bitrate,
+        sbr,
+        bandwidth,
+    })?;
+    println!(
+        "fdk ASC {:02x?} frame {}",
+        enc.audio_specific_config(),
+        enc.frame_length()
+    );
     let frames = (secs * 100.0) as usize;
     let mut file = Vec::new();
     let mut n = 0u64;
@@ -104,7 +127,10 @@ fn capture(secs: u64) -> Result<()> {
             cap.read_frame(&mut pcm)?;
             peak = peak.max(pcm.iter().map(|&x| (x as i32).abs()).max().unwrap_or(0));
         }
-        println!("sec {s}: 100 frames, peak {:.1} dBFS", 20.0 * ((peak.max(1)) as f64 / 32768.0).log10());
+        println!(
+            "sec {s}: 100 frames, peak {:.1} dBFS",
+            20.0 * ((peak.max(1)) as f64 / 32768.0).log10()
+        );
     }
     Ok(())
 }
@@ -148,8 +174,14 @@ fn main() -> Result<()> {
         return encode(
             &args[1],
             args[2].parse()?,
-            args.get(3).map(|s| s.parse()).transpose()?.unwrap_or(96_000),
-            args.get(4).map(|s| s.parse()).transpose()?.unwrap_or(1000.0),
+            args.get(3)
+                .map(|s| s.parse())
+                .transpose()?
+                .unwrap_or(96_000),
+            args.get(4)
+                .map(|s| s.parse())
+                .transpose()?
+                .unwrap_or(1000.0),
             args.get(5).map(|s| s.parse()).transpose()?.unwrap_or(-70.0),
             args.get(6).map(String::as_str) != Some("nosbr"),
             args.get(7).map(|s| s.parse()).transpose()?.unwrap_or(0),
@@ -157,7 +189,11 @@ fn main() -> Result<()> {
         #[cfg(not(target_os = "linux"))]
         bail!("encode needs Linux (libfdk-aac)");
     }
-    let flag = |name: &str| args.iter().position(|a| a == name).map(|i| args[i + 1].clone());
+    let flag = |name: &str| {
+        args.iter()
+            .position(|a| a == name)
+            .map(|i| args[i + 1].clone())
+    };
     let json = std::fs::read_to_string(&args[0])?;
     let ssrc: u32 = json_field(&json, "remoteSSRC")?.parse()?;
     let remote_ssrc: u32 = json_field(&json, "localSSRC")?.parse()?;
@@ -167,13 +203,21 @@ fn main() -> Result<()> {
     }
     let srtp = args.iter().any(|a| a == "--srtp");
     let key = |k: &str| -> Result<[u8; MASTER_LEN]> {
-        base64(&json_field(&json, k)?).try_into().map_err(|_| anyhow::anyhow!("bad key {k}"))
+        base64(&json_field(&json, k)?)
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("bad key {k}"))
     };
     let mut tx = SrtpContext::new(&key("kSV")?);
     let mut rx = SrtpContext::new(&key("kVS")?);
     let aus = read_aus(&args[1])?;
-    let secs: f64 = flag("--seconds").map(|s| s.parse()).transpose()?.unwrap_or(aus.len() as f64 / 100.0);
-    let seq = flag("--seq-base").map(|s| u16::from_str_radix(&s, 16)).transpose()?.unwrap_or(0x1234);
+    let secs: f64 = flag("--seconds")
+        .map(|s| s.parse())
+        .transpose()?
+        .unwrap_or(aus.len() as f64 / 100.0);
+    let seq = flag("--seq-base")
+        .map(|s| u16::from_str_radix(&s, 16))
+        .transpose()?
+        .unwrap_or(0x1234);
     let mut pk = AudioPacketizer::new(ssrc, pt, seq, rand::random());
 
     let sock = UdpSocket::bind("127.0.0.1:41014")?;

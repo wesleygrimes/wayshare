@@ -58,7 +58,10 @@ mod bench {
                 changed += 1;
                 rects += src.dirty_rects().len();
                 if changed <= 3 {
-                    println!("dirty {:?}", &src.dirty_rects()[..src.dirty_rects().len().min(4)]);
+                    println!(
+                        "dirty {:?}",
+                        &src.dirty_rects()[..src.dirty_rects().len().min(4)]
+                    );
                 }
             }
         }
@@ -69,7 +72,12 @@ mod bench {
             rects as f64 / changed.max(1) as f64,
             (cpu_time() - cpu0).as_secs_f64() / wall * 100.0
         );
-        println!("advance (changed) ms: p50 {:.2} p95 {:.2} max {:.2}", pct(&mut adv_ms, 0.5), pct(&mut adv_ms, 0.95), pct(&mut adv_ms, 1.0));
+        println!(
+            "advance (changed) ms: p50 {:.2} p95 {:.2} max {:.2}",
+            pct(&mut adv_ms, 0.5),
+            pct(&mut adv_ms, 0.95),
+            pct(&mut adv_ms, 1.0)
+        );
         Ok(())
     }
 
@@ -97,7 +105,8 @@ mod bench {
         for out in rx {
             let out = out?;
             if let Some(p) = out.presented {
-                a.lat_ms.push(monotonic_now().saturating_sub(p).as_secs_f64() * 1e3);
+                a.lat_ms
+                    .push(monotonic_now().saturating_sub(p).as_secs_f64() * 1e3);
             }
             a.diff_ms.push(out.timings.diff.as_secs_f64() * 1e3);
             a.conv_ms.push(out.timings.convert.as_secs_f64() * 1e3);
@@ -147,7 +156,11 @@ mod bench {
                 Ok("x265") => Some(EncoderBackend::X265),
                 _ => None,
             },
-            chroma: if env::<u32>("ARDD_CHROMA") == Some(444) { Chroma::Yuv444 } else { Chroma::Yuv420 },
+            chroma: if env::<u32>("ARDD_CHROMA") == Some(444) {
+                Chroma::Yuv444
+            } else {
+                Chroma::Yuv420
+            },
             x265: X265Options {
                 preset: std::env::var("ARDD_X265_PRESET").unwrap_or_else(|_| "ultrafast".into()),
                 threads_per_tile: env("ARDD_X265_THREADS"),
@@ -155,10 +168,11 @@ mod bench {
             ..Default::default()
         };
         // "frame:bps": switch the bitrate at that frame; bitrate is reported before/after.
-        let rate_switch: Option<(u64, u64)> = std::env::var("ARDD_SET_BITRATE_AT").ok().and_then(|v| {
-            let (f, b) = v.split_once(':')?;
-            Some((f.parse().ok()?, b.parse().ok()?))
-        });
+        let rate_switch: Option<(u64, u64)> =
+            std::env::var("ARDD_SET_BITRATE_AT").ok().and_then(|v| {
+                let (f, b) = v.split_once(':')?;
+                Some((f.parse().ok()?, b.parse().ok()?))
+            });
         let skip_encode = std::env::var_os("ARDD_SKIP_ENCODE").is_some();
         let idr_every: u64 = env("ARDD_IDR_EVERY").unwrap_or(0);
 
@@ -178,7 +192,11 @@ mod bench {
         };
         println!("backend {backend:?}, capture memory {memory:?}");
         let mut cap = Capturer::with_options(output, CaptureOptions { protocol, memory })?;
-        println!("protocol {:?}, render node {}", cap.protocol(), cap.render_node().display());
+        println!(
+            "protocol {:?}, render node {}",
+            cap.protocol(),
+            cap.render_node().display()
+        );
 
         let first = loop {
             if let Some(f) = cap.next_frame(Some(Duration::from_secs(2)))? {
@@ -253,7 +271,11 @@ mod bench {
                 && captured.is_multiple_of(n)
             {
                 let base = cfg.bitrate_bps.unwrap_or(33_000_000);
-                enc.set_bitrate(if (captured / n).is_multiple_of(2) { base * 6 / 5 } else { base * 4 / 5 });
+                enc.set_bitrate(if (captured / n).is_multiple_of(2) {
+                    base * 6 / 5
+                } else {
+                    base * 4 / 5
+                });
             }
             if idr_every > 0 && captured > 0 && captured.is_multiple_of(idr_every) {
                 enc.request_keyframe(None);
@@ -277,7 +299,11 @@ mod bench {
             let l = enc.layout();
             let b = &frame.buffer;
             if (b.width, b.height) != (l.width, l.height) {
-                anyhow::bail!("output resized to {}x{} during the bench; rerun", b.width, b.height);
+                anyhow::bail!(
+                    "output resized to {}x{} during the bench; rerun",
+                    b.width,
+                    b.height
+                );
             }
             let t0 = Instant::now();
             enc.submit(&frame)?;
@@ -290,21 +316,46 @@ mod bench {
         let cpu = (cpu_time() - cpu0).as_secs_f64();
         let frames = acc.frames;
 
-        println!("captured {captured}, dropped {dropped}, coded {frames} in {wall:.1}s = {:.1} fps", frames as f64 / wall);
-        println!("tiles encoded per index {:?}, IDR tile-frames {}", acc.tile_counts, acc.idrs);
+        println!(
+            "captured {captured}, dropped {dropped}, coded {frames} in {wall:.1}s = {:.1} fps",
+            frames as f64 / wall
+        );
+        println!(
+            "tiles encoded per index {:?}, IDR tile-frames {}",
+            acc.tile_counts, acc.idrs
+        );
         println!(
             "bitrate {:.2} Mbps avg, largest frame {} KiB",
             acc.bytes as f64 * 8.0 / wall / 1e6,
             acc.max_frame / 1024
         );
         println!("cpu {:.1}% of one core", cpu / wall * 100.0);
-        let mbps: Vec<String> = acc.per_second.iter().map(|b| format!("{:.1}", *b as f64 * 8.0 / 1e6)).collect();
+        let mbps: Vec<String> = acc
+            .per_second
+            .iter()
+            .map(|b| format!("{:.1}", *b as f64 * 8.0 / 1e6))
+            .collect();
         println!("Mbps per second: {}", mbps.join(" "));
         if let Some(ts) = t_switch {
             println!("bitrate switched at {ts:.1}s");
         }
-        let (lat_ms, diff_ms, conv_ms, vcn_ms) = (&mut acc.lat_ms, &mut acc.diff_ms, &mut acc.conv_ms, &mut acc.vcn_ms);
-        for (name, v) in [("capture wait", &mut wait_ms), ("ready->submitted", &mut enc_ms), ("present->encoded", lat_ms), ("  present->ready", &mut ready_ms), ("  diff", diff_ms), ("  convert", conv_ms), ("  submit->coded", vcn_ms), ("cpu copy 30MB", &mut copy_ms), ("cpu compare", &mut cmp_ms)] {
+        let (lat_ms, diff_ms, conv_ms, vcn_ms) = (
+            &mut acc.lat_ms,
+            &mut acc.diff_ms,
+            &mut acc.conv_ms,
+            &mut acc.vcn_ms,
+        );
+        for (name, v) in [
+            ("capture wait", &mut wait_ms),
+            ("ready->submitted", &mut enc_ms),
+            ("present->encoded", lat_ms),
+            ("  present->ready", &mut ready_ms),
+            ("  diff", diff_ms),
+            ("  convert", conv_ms),
+            ("  submit->coded", vcn_ms),
+            ("cpu copy 30MB", &mut copy_ms),
+            ("cpu compare", &mut cmp_ms),
+        ] {
             println!(
                 "{name:>17} ms: p50 {:.2} p95 {:.2} p99 {:.2} max {:.2} (n={})",
                 pct(v, 0.5),

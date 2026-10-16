@@ -17,9 +17,22 @@ fn main() -> anyhow::Result<()> {
     use wayshare::input::{InputSink, PointerConfig, ScrollEvent};
 
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let arg = |i: usize| -> anyhow::Result<u32> { Ok(args.get(i).ok_or_else(|| anyhow::anyhow!("missing arg {i}"))?.parse()?) };
+    let arg = |i: usize| -> anyhow::Result<u32> {
+        Ok(args
+            .get(i)
+            .ok_or_else(|| anyhow::anyhow!("missing arg {i}"))?
+            .parse()?)
+    };
     let sleep = |ms| std::thread::sleep(Duration::from_millis(ms));
-    let connect = |output: Option<&str>, w, h| WaylandInput::connect(output, w, h, KeyboardConfig::default(), PointerConfig::default());
+    let connect = |output: Option<&str>, w, h| {
+        WaylandInput::connect(
+            output,
+            w,
+            h,
+            KeyboardConfig::default(),
+            PointerConfig::default(),
+        )
+    };
     match args.first().map(String::as_str) {
         Some("outputs") => {
             for o in Hyprland::from_env()?.outputs()? {
@@ -45,7 +58,12 @@ fn main() -> anyhow::Result<()> {
                 sleep(100);
                 inp.pointer(x, y, 8)?;
                 sleep(100);
-                let mut ev = ScrollEvent { flags: 2, point_y: -5, scroll_phase: 1, ..Default::default() };
+                let mut ev = ScrollEvent {
+                    flags: 2,
+                    point_y: -5,
+                    scroll_phase: 1,
+                    ..Default::default()
+                };
                 inp.scroll(&ev)?;
                 ev.scroll_phase = 2;
                 inp.scroll(&ev)?;

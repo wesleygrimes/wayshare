@@ -36,7 +36,14 @@ pub struct Planner {
 
 impl Planner {
     pub fn new(per_tile_skip: bool) -> Self {
-        Self { refresh: true, intra: 0, heartbeat: false, last: [0; TILE_COUNT], pics: 0, per_tile_skip }
+        Self {
+            refresh: true,
+            intra: 0,
+            heartbeat: false,
+            last: [0; TILE_COUNT],
+            pics: 0,
+            per_tile_skip,
+        }
     }
 
     /// `None`: full refresh (IDR on tile 0, intra on the rest). `Some(t)`: intra-code tile `t`.
@@ -62,7 +69,14 @@ impl Planner {
             self.intra = 0;
             self.pics = 0;
             (0..TILE_COUNT)
-                .map(|tile| TilePic { tile, kind: if tile == 0 { PicKind::Idr } else { PicKind::Intra } })
+                .map(|tile| TilePic {
+                    tile,
+                    kind: if tile == 0 {
+                        PicKind::Idr
+                    } else {
+                        PicKind::Intra
+                    },
+                })
                 .collect()
         } else {
             let stale = (0..TILE_COUNT)
@@ -80,7 +94,11 @@ impl Planner {
                 .filter(|t| mask & (1 << t) != 0)
                 .map(|tile| TilePic {
                     tile,
-                    kind: if intra & (1 << tile) != 0 { PicKind::Intra } else { PicKind::Inter },
+                    kind: if intra & (1 << tile) != 0 {
+                        PicKind::Intra
+                    } else {
+                        PicKind::Inter
+                    },
                 })
                 .collect()
         };
@@ -104,7 +122,10 @@ mod tests {
     #[test]
     fn refresh_then_skip() {
         let mut p = Planner::new(true);
-        assert_eq!(kinds(&p.plan(0)), [(0, Idr), (1, Intra), (2, Intra), (3, Intra)]);
+        assert_eq!(
+            kinds(&p.plan(0)),
+            [(0, Idr), (1, Intra), (2, Intra), (3, Intra)]
+        );
         assert_eq!(kinds(&p.plan(0b0100)), [(2, Inter)]);
         assert!(p.plan(0).is_empty());
         p.request_keyframe(Some(1));
@@ -117,7 +138,10 @@ mod tests {
     fn all_tiles_without_per_tile_skip() {
         let mut p = Planner::new(false);
         p.plan(0);
-        assert_eq!(kinds(&p.plan(0b0010)), [(0, Inter), (1, Inter), (2, Inter), (3, Inter)]);
+        assert_eq!(
+            kinds(&p.plan(0b0010)),
+            [(0, Inter), (1, Inter), (2, Inter), (3, Inter)]
+        );
         assert!(p.plan(0).is_empty());
     }
 

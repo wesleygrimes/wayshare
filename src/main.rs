@@ -3,15 +3,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
+use clap::{Parser, Subcommand};
+use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
 use wayshare::auth::StaticPassword;
 use wayshare::config::Settings;
 use wayshare::rfb::clipboard::MemoryClipboard;
 use wayshare::rfb::media::StubHpBackend;
 use wayshare::rfb::srp::{self, VerifierRecord};
 use wayshare::rfb::{self, AuthConfig, Config};
-use clap::{Parser, Subcommand};
-use tracing::{info, warn};
-use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(
@@ -175,7 +175,9 @@ async fn main() -> Result<()> {
     if let Some(Command::InstallService) = cli.command {
         let path = wayshare::service::install()?;
         println!("wrote {}", path.display());
-        let reload = std::process::Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+        let reload = std::process::Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
         if !reload.is_ok_and(|s| s.success()) {
             warn!("systemctl --user daemon-reload failed; run it before starting wayshare");
         }
@@ -244,7 +246,9 @@ async fn run(s: Settings) -> Result<()> {
         match wayshare::clipboard::wayland::WaylandClipboard::spawn() {
             Ok(cb) => {
                 let backend: Arc<dyn wayshare::clipboard::ClipboardBackend> = Arc::new(cb);
-                cfg.clipboard = Some(Arc::new(wayshare::clipboard::TextBridge::new(backend.clone())));
+                cfg.clipboard = Some(Arc::new(wayshare::clipboard::TextBridge::new(
+                    backend.clone(),
+                )));
                 cfg.clipboard_backend = Some(backend);
             }
             Err(e) => warn!("Wayland clipboard unavailable, text-only clipboard: {e:#}"),

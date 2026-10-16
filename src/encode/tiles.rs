@@ -62,7 +62,10 @@ impl RateState {
             self.pending = None;
             return None;
         }
-        if self.changed_at.is_some_and(|t| t.elapsed() < self.min_interval) {
+        if self
+            .changed_at
+            .is_some_and(|t| t.elapsed() < self.min_interval)
+        {
             return None;
         }
         self.pending = None;
@@ -71,7 +74,6 @@ impl RateState {
         Some(bps)
     }
 }
-
 
 pub(super) struct Tiles<B> {
     pub(super) backend: B,
@@ -108,7 +110,12 @@ impl<B: Backend> Tiles<B> {
             layout,
             differ,
             planner: Planner::new(per_tile_skip),
-            rate: RateState { current: cfg.bitrate_bps, pending: None, changed_at: None, min_interval: rate_interval },
+            rate: RateState {
+                current: cfg.bitrate_bps,
+                pending: None,
+                changed_at: None,
+                min_interval: rate_interval,
+            },
             seq: 0,
             pending: VecDeque::new(),
             output: None,
@@ -153,7 +160,12 @@ impl<B: Backend> Tiles<B> {
     pub(super) fn submit(&mut self, frame: &Frame) -> Result<()> {
         let b = &frame.buffer;
         if (b.width, b.height) != (self.layout.width, self.layout.height) {
-            bail!("frame {}x{} doesn't match encoder {:?}", b.width, b.height, self.layout);
+            bail!(
+                "frame {}x{} doesn't match encoder {:?}",
+                b.width,
+                b.height,
+                self.layout
+            );
         }
         let mut timings = EncodeTimings::default();
         let t0 = Instant::now();
@@ -165,10 +177,14 @@ impl<B: Backend> Tiles<B> {
             }
         };
         let changed = match (detected, &mut self.differ) {
-            (Some(c), _) => (0..TILE_COUNT).filter(|&t| c[t]).fold(0u8, |m, t| m | 1 << t),
+            (Some(c), _) => (0..TILE_COUNT)
+                .filter(|&t| c[t])
+                .fold(0u8, |m, t| m | 1 << t),
             (None, Some(d)) => {
                 let c = d.diff(b)?;
-                (0..TILE_COUNT).filter(|&t| c[t]).fold(0u8, |m, t| m | 1 << t)
+                (0..TILE_COUNT)
+                    .filter(|&t| c[t])
+                    .fold(0u8, |m, t| m | 1 << t)
             }
             (None, None) => self.layout.tiles_touched(&frame.damage),
         };
@@ -186,7 +202,14 @@ impl<B: Backend> Tiles<B> {
         }
         let pics = self.planner.plan(changed);
         let frame_size = (self.layout.width as u16, self.layout.height as u16);
-        let meta = EncodedFrame { seq, changed_tiles, tiles: Vec::new(), timings, presented: frame.presented, frame_size };
+        let meta = EncodedFrame {
+            seq,
+            changed_tiles,
+            tiles: Vec::new(),
+            timings,
+            presented: frame.presented,
+            frame_size,
+        };
         let streaming = self.direct || self.output.is_some();
         if pics.is_empty() {
             if !streaming {
@@ -210,7 +233,9 @@ impl<B: Backend> Tiles<B> {
     }
 
     pub(super) fn receive(&mut self, timeout: Option<Duration>) -> Result<Option<EncodedFrame>> {
-        let Some(front) = self.pending.front_mut() else { return Ok(None) };
+        let Some(front) = self.pending.front_mut() else {
+            return Ok(None);
+        };
         if let Some(f) = front.take() {
             self.pending.pop_front();
             return Ok(Some(f));

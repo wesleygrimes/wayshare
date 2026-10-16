@@ -145,7 +145,13 @@ mod tests {
 
     #[test]
     fn ansi_letters_by_position() {
-        let qwerty = [(0x0c, KEY_Q), (0x0d, KEY_W), (0x00, KEY_A), (0x06, KEY_Z), (0x2e, KEY_M)];
+        let qwerty = [
+            (0x0c, KEY_Q),
+            (0x0d, KEY_W),
+            (0x00, KEY_A),
+            (0x06, KEY_Z),
+            (0x2e, KEY_M),
+        ];
         for (kvk, code) in qwerty {
             assert_eq!(to_evdev(kvk), Some(code), "kVK {kvk:#x}");
         }
@@ -180,7 +186,13 @@ mod tests {
             assert!(modifier(kvk).is_some());
             assert_eq!(to_evdev(kvk), None);
         }
-        assert_eq!(modifier(0x37), Some(Modifier { key: ModKey::Command, right: false }));
+        assert_eq!(
+            modifier(0x37),
+            Some(Modifier {
+                key: ModKey::Command,
+                right: false
+            })
+        );
         assert_eq!(to_evdev(KVK_FUNCTION), None);
     }
 

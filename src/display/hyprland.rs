@@ -39,7 +39,12 @@ impl Hyprland {
 
     pub fn check_version(&self) -> Result<()> {
         let version = parse_version(&self.request("j/version")?)?;
-        ensure!(supported(&version), "wayshare needs Hyprland {}.{} or newer, found {version}", MIN_VERSION.0, MIN_VERSION.1);
+        ensure!(
+            supported(&version),
+            "wayshare needs Hyprland {}.{} or newer, found {version}",
+            MIN_VERSION.0,
+            MIN_VERSION.1
+        );
         Ok(())
     }
 
@@ -50,13 +55,25 @@ impl Hyprland {
     }
 
     fn apply_rule(&self, output: &str, mode: &DisplayMode, position: &str) -> Result<()> {
-        let m = format!("{}x{}@{}", mode.width, mode.height, fmt_num(mode.refresh_hz));
-        self.ok(&lua_monitor_rule(output, &m, position, &fmt_num(mode.scale)))
+        let m = format!(
+            "{}x{}@{}",
+            mode.width,
+            mode.height,
+            fmt_num(mode.refresh_hz)
+        );
+        self.ok(&lua_monitor_rule(
+            output,
+            &m,
+            position,
+            &fmt_num(mode.scale),
+        ))
     }
 }
 
 fn runtime_dir() -> Result<PathBuf> {
-    Ok(std::env::var_os("XDG_RUNTIME_DIR").context("XDG_RUNTIME_DIR not set")?.into())
+    Ok(std::env::var_os("XDG_RUNTIME_DIR")
+        .context("XDG_RUNTIME_DIR not set")?
+        .into())
 }
 
 fn instance_dir() -> Result<PathBuf> {
@@ -70,8 +87,10 @@ fn instance_dir() -> Result<PathBuf> {
 /// The Wayland socket of the Hyprland instance, for when `$WAYLAND_DISPLAY` is unset.
 pub fn wayland_socket() -> Result<PathBuf> {
     let lock = instance_dir()?.join("hyprland.lock");
-    let text = std::fs::read_to_string(&lock).with_context(|| format!("read {}", lock.display()))?;
-    let name = lock_wayland_display(&text).ok_or_else(|| anyhow!("no Wayland socket in {}", lock.display()))?;
+    let text =
+        std::fs::read_to_string(&lock).with_context(|| format!("read {}", lock.display()))?;
+    let name = lock_wayland_display(&text)
+        .ok_or_else(|| anyhow!("no Wayland socket in {}", lock.display()))?;
     Ok(runtime_dir()?.join(name))
 }
 
@@ -85,7 +104,9 @@ fn newest_live_instance(hypr: &Path) -> Result<PathBuf> {
     for e in std::fs::read_dir(hypr).with_context(|| format!("read {}", hypr.display()))? {
         let dir = e?.path();
         let sock = dir.join(".socket.sock");
-        let Ok(meta) = std::fs::metadata(&sock) else { continue };
+        let Ok(meta) = std::fs::metadata(&sock) else {
+            continue;
+        };
         if UnixStream::connect(&sock).is_err() {
             continue;
         }
@@ -94,12 +115,16 @@ fn newest_live_instance(hypr: &Path) -> Result<PathBuf> {
             best = Some((t, dir));
         }
     }
-    best.map(|(_, p)| p).ok_or_else(|| anyhow!("no running Hyprland instance under {}", hypr.display()))
+    best.map(|(_, p)| p)
+        .ok_or_else(|| anyhow!("no running Hyprland instance under {}", hypr.display()))
 }
 
 fn check_name(name: &str) -> Result<()> {
     ensure!(
-        !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
+        !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
         "invalid output name {name:?}"
     );
     Ok(())
@@ -111,12 +136,17 @@ fn fmt_num(v: f64) -> String {
 }
 
 fn lua_monitor_rule(output: &str, mode: &str, position: &str, scale: &str) -> String {
-    format!("eval hl.monitor({{ output = \"{output}\", mode = \"{mode}\", position = \"{position}\", scale = {scale} }})")
+    format!(
+        "eval hl.monitor({{ output = \"{output}\", mode = \"{mode}\", position = \"{position}\", scale = {scale} }})"
+    )
 }
 
 fn parse_version(json: &str) -> Result<String> {
     let v: Value = serde_json::from_str(json).context("version JSON")?;
-    Ok(v["version"].as_str().ok_or_else(|| anyhow!("version: missing version"))?.to_string())
+    Ok(v["version"]
+        .as_str()
+        .ok_or_else(|| anyhow!("version: missing version"))?
+        .to_string())
 }
 
 fn supported(version: &str) -> bool {
@@ -129,14 +159,28 @@ fn supported(version: &str) -> bool {
 
 pub fn parse_monitors(json: &str) -> Result<Vec<OutputInfo>> {
     let v: Value = serde_json::from_str(json).context("monitors JSON")?;
-    let arr = v.as_array().ok_or_else(|| anyhow!("monitors: not an array"))?;
+    let arr = v
+        .as_array()
+        .ok_or_else(|| anyhow!("monitors: not an array"))?;
     arr.iter()
         .map(|m| {
-            let u = |k: &str| m[k].as_u64().ok_or_else(|| anyhow!("monitors: missing {k}"));
-            let i = |k: &str| m[k].as_i64().ok_or_else(|| anyhow!("monitors: missing {k}"));
-            let f = |k: &str| m[k].as_f64().ok_or_else(|| anyhow!("monitors: missing {k}"));
+            let u = |k: &str| {
+                m[k].as_u64()
+                    .ok_or_else(|| anyhow!("monitors: missing {k}"))
+            };
+            let i = |k: &str| {
+                m[k].as_i64()
+                    .ok_or_else(|| anyhow!("monitors: missing {k}"))
+            };
+            let f = |k: &str| {
+                m[k].as_f64()
+                    .ok_or_else(|| anyhow!("monitors: missing {k}"))
+            };
             Ok(OutputInfo {
-                name: m["name"].as_str().ok_or_else(|| anyhow!("monitors: missing name"))?.to_string(),
+                name: m["name"]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("monitors: missing name"))?
+                    .to_string(),
                 width: u("width")? as u32,
                 height: u("height")? as u32,
                 refresh_hz: f("refreshRate")?,
@@ -171,12 +215,22 @@ impl DisplayManager for Hyprland {
                 && o.height == mode.height
             {
                 if (o.scale - mode.scale).abs() > 1e-3 {
-                    warn!(output, requested = mode.scale, actual = o.scale, "compositor changed scale");
+                    warn!(
+                        output,
+                        requested = mode.scale,
+                        actual = o.scale,
+                        "compositor changed scale"
+                    );
                 }
                 return Ok(o.clone());
             }
             if Instant::now() > deadline {
-                bail!("{output} did not switch to {}x{} (now {:?})", mode.width, mode.height, now.map(|o| o.mode()));
+                bail!(
+                    "{output} did not switch to {}x{} (now {:?})",
+                    mode.width,
+                    mode.height,
+                    now.map(|o| o.mode())
+                );
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -210,7 +264,15 @@ mod tests {
     fn parses_monitors() {
         let m = parse_monitors(MONITORS).unwrap();
         assert_eq!(m.len(), 2);
-        assert_eq!(m[0].mode(), DisplayMode { width: 3456, height: 2160, refresh_hz: 60.0, scale: 2.0 });
+        assert_eq!(
+            m[0].mode(),
+            DisplayMode {
+                width: 3456,
+                height: 2160,
+                refresh_hz: 60.0,
+                scale: 2.0
+            }
+        );
         assert!(m[0].focused);
         assert_eq!((m[1].name.as_str(), m[1].x), ("ARDTEST-1", 1728));
         assert!(parse_monitors("{}").is_err());

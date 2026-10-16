@@ -59,7 +59,11 @@ impl MonitorCapture {
         let sym = |n: &str| -> Result<*mut c_void> {
             let c = CString::new(n).unwrap();
             let p = unsafe { libc::dlsym(lib, c.as_ptr()) };
-            if p.is_null() { Err(anyhow!("libpulse-simple lacks {n}")) } else { Ok(p) }
+            if p.is_null() {
+                Err(anyhow!("libpulse-simple lacks {n}"))
+            } else {
+                Ok(p)
+            }
         };
         let (new, read, free): (NewFn, ReadFn, FreeFn) = unsafe {
             (
@@ -68,7 +72,11 @@ impl MonitorCapture {
                 std::mem::transmute::<*mut c_void, FreeFn>(sym("pa_simple_free")?),
             )
         };
-        let spec = SampleSpec { format: PA_SAMPLE_S16LE, rate: CLOCK_RATE, channels: CHANNELS as u8 };
+        let spec = SampleSpec {
+            format: PA_SAMPLE_S16LE,
+            rate: CLOCK_RATE,
+            channels: CHANNELS as u8,
+        };
         let attr = BufferAttr {
             maxlength: u32::MAX,
             tlength: u32::MAX,
@@ -81,16 +89,45 @@ impl MonitorCapture {
         let dev = CString::new(device.unwrap_or(DEFAULT_MONITOR))?;
         let mut err = 0;
         let s = unsafe {
-            new(std::ptr::null(), app.as_ptr(), PA_STREAM_RECORD, dev.as_ptr(), stream.as_ptr(), &spec, std::ptr::null(), &attr, &mut err)
+            new(
+                std::ptr::null(),
+                app.as_ptr(),
+                PA_STREAM_RECORD,
+                dev.as_ptr(),
+                stream.as_ptr(),
+                &spec,
+                std::ptr::null(),
+                &attr,
+                &mut err,
+            )
         };
-        ensure!(!s.is_null(), "pa_simple_new({}) failed: error {err}", dev.to_string_lossy());
-        Ok(Self { s, read, free, _lib: lib })
+        ensure!(
+            !s.is_null(),
+            "pa_simple_new({}) failed: error {err}",
+            dev.to_string_lossy()
+        );
+        Ok(Self {
+            s,
+            read,
+            free,
+            _lib: lib,
+        })
     }
 
     /// Blocks for one 10 ms frame of interleaved stereo i16.
-    pub fn read_frame(&mut self, out: &mut [i16; (SAMPLES_PER_FRAME * CHANNELS) as usize]) -> Result<()> {
+    pub fn read_frame(
+        &mut self,
+        out: &mut [i16; (SAMPLES_PER_FRAME * CHANNELS) as usize],
+    ) -> Result<()> {
         let mut err = 0;
-        let r = unsafe { (self.read)(self.s, out.as_mut_ptr() as *mut c_void, out.len() * 2, &mut err) };
+        let r = unsafe {
+            (self.read)(
+                self.s,
+                out.as_mut_ptr() as *mut c_void,
+                out.len() * 2,
+                &mut err,
+            )
+        };
         ensure!(r == 0, "pa_simple_read failed: error {err}");
         Ok(())
     }

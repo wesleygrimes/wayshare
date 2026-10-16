@@ -110,7 +110,9 @@ pub fn us(keysym: u32) -> Option<(u32, bool)> {
         KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J, KEY_K, KEY_L, KEY_M,
         KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
     ];
-    const DIGITS: [u32; 10] = [KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9];
+    const DIGITS: [u32; 10] = [
+        KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
+    ];
     let c = char::from_u32(keysym)?;
     Some(match c {
         'a'..='z' => (LETTERS[c as usize - 'a' as usize], false),
@@ -197,9 +199,21 @@ mod tests {
 
     #[test]
     fn modifiers() {
-        assert_eq!(modifier(0xffe1), Some(Modifier { key: ModKey::Shift, right: false }));
+        assert_eq!(
+            modifier(0xffe1),
+            Some(Modifier {
+                key: ModKey::Shift,
+                right: false
+            })
+        );
         assert_eq!(modifier(0xffe7).unwrap().key, ModKey::Command);
-        assert_eq!(modifier(0xffec), Some(Modifier { key: ModKey::Command, right: true }));
+        assert_eq!(
+            modifier(0xffec),
+            Some(Modifier {
+                key: ModKey::Command,
+                right: true
+            })
+        );
         assert_eq!(modifier(0xffe9).unwrap().key, ModKey::Option);
         assert_eq!(modifier('a' as u32), None);
     }

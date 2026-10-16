@@ -72,7 +72,11 @@ impl ClipboardBackend for MemoryBackend {
 
     fn offered(&self) -> Vec<&'static str> {
         let s = self.state.lock().unwrap();
-        s.content.0.iter().filter_map(|(m, _)| mime::canonical(m)).collect()
+        s.content
+            .0
+            .iter()
+            .filter_map(|(m, _)| mime::canonical(m))
+            .collect()
     }
 
     fn read(&self) -> Result<ClipContent> {
@@ -106,7 +110,10 @@ pub struct TextBridge {
 
 impl TextBridge {
     pub fn new(backend: Arc<dyn ClipboardBackend>) -> Self {
-        Self { backend, cache: Mutex::new(None) }
+        Self {
+            backend,
+            cache: Mutex::new(None),
+        }
     }
 }
 
@@ -147,7 +154,10 @@ mod tests {
         assert_eq!(sync.pending(&bridge).as_deref(), Some("server copy"));
         assert_eq!(sync.pending(&bridge), None);
         sync.from_client(&bridge, "from viewer".into());
-        assert_eq!(backend.read().unwrap().as_text().as_deref(), Some("from viewer"));
+        assert_eq!(
+            backend.read().unwrap().as_text().as_deref(),
+            Some("from viewer")
+        );
         assert_eq!(sync.pending(&bridge), None);
     }
 
@@ -156,10 +166,16 @@ mod tests {
     fn apple_flow() {
         let backend = MemoryBackend::default();
         // Server copy -> MiscStateChange 2 -> client msg 11 (session 7) -> server msg 31.
-        backend.copy(ClipContent(vec![(mime::HTML.into(), b"<i>x</i>".to_vec()), (mime::TEXT.into(), b"x".to_vec())]));
+        backend.copy(ClipContent(vec![
+            (mime::HTML.into(), b"<i>x</i>".to_vec()),
+            (mime::TEXT.into(), b"x".to_vec()),
+        ]));
         let reply = server_clipboard_data(7, &backend.read().unwrap());
         let ulen = u32::from_be_bytes(reply[8..12].try_into().unwrap());
-        let ViewerPasteboard::Data(got) = decode_viewer_send(reply[2], ulen, &reply[16..]).unwrap() else { panic!() };
+        let ViewerPasteboard::Data(got) = decode_viewer_send(reply[2], ulen, &reply[16..]).unwrap()
+        else {
+            panic!()
+        };
         assert_eq!(got.get(mime::HTML), Some(&b"<i>x</i>"[..]));
 
         // Viewer promises -> server app pastes -> MiscStateChange 3 -> client full msg 31.

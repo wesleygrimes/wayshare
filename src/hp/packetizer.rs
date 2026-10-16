@@ -97,7 +97,10 @@ fn nal_type(nal: &[u8]) -> u8 {
 }
 
 fn tile_height(frame_size: (u16, u16), tiles: u8) -> u16 {
-    frame_size.1.div_ceil(tiles.max(1).into()).next_multiple_of(16)
+    frame_size
+        .1
+        .div_ceil(tiles.max(1).into())
+        .next_multiple_of(16)
 }
 
 impl Packetizer {
@@ -323,7 +326,10 @@ mod tests {
         let don = pk.next_don();
         pk.set_frame_size((2560, 1440));
         let c = pk.config();
-        assert_eq!((c.frame_size, c.tile_height, c.display_size), ((2560, 1440), 368, (2560, 1440)));
+        assert_eq!(
+            (c.frame_size, c.tile_height, c.display_size),
+            ((2560, 1440), 368, (2560, 1440))
+        );
         assert_eq!(pk.next_don(), don);
     }
 

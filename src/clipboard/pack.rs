@@ -19,7 +19,10 @@ pub struct Flavor {
 
 impl Flavor {
     pub fn tag(&self, class: &str) -> Option<&str> {
-        self.tags.iter().find(|(k, _)| k == class).map(|(_, v)| v.as_str())
+        self.tags
+            .iter()
+            .find(|(k, _)| k == class)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -36,7 +39,14 @@ pub fn pack(items: &[Item]) -> Vec<u8> {
     for item in items {
         out.extend_from_slice(&(item.len() as u32).to_be_bytes());
         for f in item {
-            put_bytes(&mut out, if f.uti.starts_with("dyn.") { b"" } else { f.uti.as_bytes() });
+            put_bytes(
+                &mut out,
+                if f.uti.starts_with("dyn.") {
+                    b""
+                } else {
+                    f.uti.as_bytes()
+                },
+            );
             out.extend_from_slice(&f.flags.to_be_bytes());
             out.extend_from_slice(&(f.tags.len() as u32).to_be_bytes());
             for (k, v) in &f.tags {
@@ -61,7 +71,10 @@ impl<'a> Reader<'a> {
 
     fn bytes(&mut self) -> Result<&'a [u8]> {
         let n = self.u32()? as usize;
-        ensure!(self.0.len() >= n, "packed scrap field of {n} bytes overruns buffer");
+        ensure!(
+            self.0.len() >= n,
+            "packed scrap field of {n} bytes overruns buffer"
+        );
         let (h, t) = self.0.split_at(n);
         self.0 = t;
         Ok(h)
@@ -85,9 +98,16 @@ pub fn unpack(buf: &[u8]) -> Result<Vec<Item>> {
             let flags = r.u32()?;
             let tag_count = r.u32()?;
             ensure!(tag_count <= MAX_TAGS, "packed scrap: {tag_count} tags");
-            let tags = (0..tag_count).map(|_| Ok((r.string()?, r.string()?))).collect::<Result<_>>()?;
+            let tags = (0..tag_count)
+                .map(|_| Ok((r.string()?, r.string()?)))
+                .collect::<Result<_>>()?;
             let data = r.bytes()?.to_vec();
-            item.push(Flavor { uti, flags, tags, data });
+            item.push(Flavor {
+                uti,
+                flags,
+                tags,
+                data,
+            });
         }
         items.push(item);
     }
@@ -105,7 +125,8 @@ pub fn compress(data: &[u8]) -> Vec<u8> {
             out.reserve(out.capacity().max(1024));
         }
         let consumed = c.total_in() as usize;
-        c.compress_vec(&data[consumed..], &mut out, FlushCompress::Sync).expect("deflate");
+        c.compress_vec(&data[consumed..], &mut out, FlushCompress::Sync)
+            .expect("deflate");
         if c.total_in() as usize == data.len() && out.len() < out.capacity() {
             return out;
         }
@@ -126,9 +147,16 @@ pub fn decompress(data: &[u8], uncompressed_len: usize) -> Result<Vec<u8>> {
         if out.len() > uncompressed_len {
             bail!("pasteboard larger than announced {uncompressed_len}");
         }
-        ensure!(d.total_in() != consumed || d.total_out() != produced, "inflate made no progress");
+        ensure!(
+            d.total_in() != consumed || d.total_out() != produced,
+            "inflate made no progress"
+        );
     }
-    ensure!(out.len() == uncompressed_len, "pasteboard inflated to {} bytes, header says {uncompressed_len}", out.len());
+    ensure!(
+        out.len() == uncompressed_len,
+        "pasteboard inflated to {} bytes, header says {uncompressed_len}",
+        out.len()
+    );
     Ok(out)
 }
 
@@ -170,7 +198,10 @@ mod tests {
         let back = unpack(&pack(&items)).unwrap();
         assert_eq!(back[0], items[0]);
         assert_eq!(back[1][0].uti, "");
-        assert_eq!(back[1][0].tag("public.mime-type"), Some("application/x-foo"));
+        assert_eq!(
+            back[1][0].tag("public.mime-type"),
+            Some("application/x-foo")
+        );
     }
 
     #[test]

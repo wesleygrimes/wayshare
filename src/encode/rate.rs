@@ -19,7 +19,14 @@ pub struct RateTrim {
 
 impl RateTrim {
     pub fn new(target: u64) -> Self {
-        Self { target, trim: 1.0, window_start: None, window_bytes: 0, window_target_bits: 0.0, last: None }
+        Self {
+            target,
+            trim: 1.0,
+            window_start: None,
+            window_bytes: 0,
+            window_target_bits: 0.0,
+            last: None,
+        }
     }
 
     /// Keeps the measured correction: the driver's overshoot doesn't depend on the target, and
@@ -44,7 +51,11 @@ impl RateTrim {
             return false;
         }
         let ratio = self.window_target_bits / (self.window_bytes as f64 * 8.0).max(1.0);
-        (self.window_start, self.window_bytes, self.window_target_bits) = (Some(now), 0, 0.0);
+        (
+            self.window_start,
+            self.window_bytes,
+            self.window_target_bits,
+        ) = (Some(now), 0, 0.0);
         let old = self.trim;
         if ratio < 0.95 {
             // Overshoot: correct most of the way at once.
@@ -85,7 +96,11 @@ mod tests {
         let mut sent = 0.0;
         for i in 0..600 {
             if i % 12 == 0 {
-                r.set_target(if (i / 12) % 2 == 0 { 12_000_000 } else { 8_000_000 });
+                r.set_target(if (i / 12) % 2 == 0 {
+                    12_000_000
+                } else {
+                    8_000_000
+                });
             }
             now += Duration::from_micros(16_667);
             let bytes = r.requested() as f64 * 1.3 / 8.0 / 60.0;

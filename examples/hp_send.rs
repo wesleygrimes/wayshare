@@ -275,7 +275,8 @@ fn main() -> Result<()> {
     let mut switch_pic = usize::MAX;
     for f in 0..frames {
         if switch_at == Some(f) {
-            let mut cfg2 = PacketizerConfig::new(ssrc_base, pt, TILES as u8, size2.context("--size2")?);
+            let mut cfg2 =
+                PacketizerConfig::new(ssrc_base, pt, TILES as u8, size2.context("--size2")?);
             cfg2.don_base = pk.next_don();
             cfg2.frame_number_base = cfg.frame_number_base.wrapping_add(f as u16);
             if let Some(d) = flag("--don2") {

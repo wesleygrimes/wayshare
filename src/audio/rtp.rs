@@ -22,7 +22,13 @@ pub struct AudioPacketizer {
 
 impl AudioPacketizer {
     pub fn new(ssrc: u32, payload_type: u8, seq: u16, ts: u32) -> Self {
-        Self { ssrc, payload_type, seq, ts, talkspurt: true }
+        Self {
+            ssrc,
+            payload_type,
+            seq,
+            ts,
+            talkspurt: true,
+        }
     }
 
     pub fn ssrc(&self) -> u32 {
@@ -71,7 +77,23 @@ mod tests {
         let mut pk = AudioPacketizer::new(0x11223344, PAYLOAD_TYPE, 0xffff, 0xffff_fe00);
         let au = [0x11u8; 100];
         let p = pk.packet(&au).unwrap();
-        assert_eq!(&p[..12], &[0x80, 0x80 | 101, 0xff, 0xff, 0xff, 0xff, 0xfe, 0x00, 0x11, 0x22, 0x33, 0x44]);
+        assert_eq!(
+            &p[..12],
+            &[
+                0x80,
+                0x80 | 101,
+                0xff,
+                0xff,
+                0xff,
+                0xff,
+                0xfe,
+                0x00,
+                0x11,
+                0x22,
+                0x33,
+                0x44
+            ]
+        );
         assert_eq!(&p[12..], &au);
         assert!(p.capacity() >= p.len() + TAG_LEN);
         let q = pk.packet(&au).unwrap();

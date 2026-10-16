@@ -43,7 +43,11 @@ impl Gl {
     pub fn new() -> Result<Self> {
         let egl = egl::Instance::new(egl::Static);
         let dpy = unsafe {
-            egl.get_platform_display(EGL_PLATFORM_SURFACELESS_MESA, egl::DEFAULT_DISPLAY, &[egl::ATTRIB_NONE])
+            egl.get_platform_display(
+                EGL_PLATFORM_SURFACELESS_MESA,
+                egl::DEFAULT_DISPLAY,
+                &[egl::ATTRIB_NONE],
+            )
         }
         .context("eglGetPlatformDisplay(surfaceless)")?;
         egl.initialize(dpy)?;
@@ -66,21 +70,30 @@ impl Gl {
         egl.make_current(dpy, None, None, Some(ctx))?;
         let gl = unsafe {
             glow::Context::from_loader_function(|s| {
-                egl.get_proc_address(s).map_or(std::ptr::null(), |f| f as *const c_void)
+                egl.get_proc_address(s)
+                    .map_or(std::ptr::null(), |f| f as *const c_void)
             })
         };
         let image_target = egl
             .get_proc_address("glEGLImageTargetTexture2DOES")
             .ok_or_else(|| anyhow!("no glEGLImageTargetTexture2DOES"))?;
         let image_target: ImageTargetTexture2D = unsafe { std::mem::transmute(image_target) };
-        let gl = Self { egl, dpy, ctx, gl, image_target };
+        let gl = Self {
+            egl,
+            dpy,
+            ctx,
+            gl,
+            image_target,
+        };
         gl.release()?;
         Ok(gl)
     }
 
     /// Made current per use so the owner may move between threads.
     pub fn make_current(&self) -> Result<()> {
-        Ok(self.egl.make_current(self.dpy, None, None, Some(self.ctx))?)
+        Ok(self
+            .egl
+            .make_current(self.dpy, None, None, Some(self.ctx))?)
     }
 
     pub fn release(&self) -> Result<()> {
@@ -90,7 +103,9 @@ impl Gl {
     pub fn program(&self, src: &str) -> Result<glow::Program> {
         let gl = &self.gl;
         unsafe {
-            let shader = gl.create_shader(glow::COMPUTE_SHADER).map_err(|e| anyhow!(e))?;
+            let shader = gl
+                .create_shader(glow::COMPUTE_SHADER)
+                .map_err(|e| anyhow!(e))?;
             gl.shader_source(shader, src);
             gl.compile_shader(shader);
             if !gl.get_shader_compile_status(shader) {
@@ -143,8 +158,16 @@ impl Gl {
             let t = gl.create_texture().map_err(|e| anyhow!(e))?;
             gl.bind_texture(glow::TEXTURE_2D, Some(t));
             (self.image_target)(glow::TEXTURE_2D, image.as_ptr());
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
-            gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
             t
         };
         Ok((image, tex))

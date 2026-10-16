@@ -107,7 +107,11 @@ impl TileDiffer {
     }
 
     /// Change detection plus BT.709 conversion into `targets[slot][tile]`.
-    pub fn with_conversion(layout: TileLayout, targets: Vec<Vec<Nv12Target>>, full_range: bool) -> Result<Self> {
+    pub fn with_conversion(
+        layout: TileLayout,
+        targets: Vec<Vec<Nv12Target>>,
+        full_range: bool,
+    ) -> Result<Self> {
         Self::build(layout, targets, full_range)
     }
 
@@ -115,8 +119,16 @@ impl TileDiffer {
         let gl = Gl::new()?;
         gl.make_current()?;
         let convert = !targets.is_empty();
-        let src = format!("#version 430\n{}{SHADER}", if convert { "#define CONVERT\n" } else { "" });
-        type Parts = (glow::Program, glow::Texture, glow::Buffer, Vec<Vec<(Imported, Imported)>>);
+        let src = format!(
+            "#version 430\n{}{SHADER}",
+            if convert { "#define CONVERT\n" } else { "" }
+        );
+        type Parts = (
+            glow::Program,
+            glow::Texture,
+            glow::Buffer,
+            Vec<Vec<(Imported, Imported)>>,
+        );
         let r = (|| -> Result<Parts> {
             let program = gl.program(&src)?;
             let g = &gl.gl;
@@ -127,12 +139,20 @@ impl TileDiffer {
                 g.tex_storage_2d(glow::TEXTURE_2D, 1, glow::R32UI, 2 * bw as i32, bh as i32);
                 let flags = g.create_buffer().map_err(|e| anyhow::anyhow!(e))?;
                 g.bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(flags));
-                g.buffer_data_size(glow::SHADER_STORAGE_BUFFER, 4 * TILE_COUNT as i32, glow::DYNAMIC_READ);
+                g.buffer_data_size(
+                    glow::SHADER_STORAGE_BUFFER,
+                    4 * TILE_COUNT as i32,
+                    glow::DYNAMIC_READ,
+                );
                 (hashes, flags)
             };
             let targets = targets
                 .iter()
-                .map(|slot| slot.iter().map(|t| Ok((gl.import(&t.y)?, gl.import(&t.uv)?))).collect::<Result<Vec<_>>>())
+                .map(|slot| {
+                    slot.iter()
+                        .map(|t| Ok((gl.import(&t.y)?, gl.import(&t.uv)?)))
+                        .collect::<Result<Vec<_>>>()
+                })
                 .collect::<Result<Vec<_>>>()?;
             Ok((program, hashes, flags, targets))
         })();
@@ -141,11 +161,23 @@ impl TileDiffer {
         // BT.709 (Kr 0.2126, Kb 0.0722), scaled for the output range.
         let (kr, kb) = (0.2126f32, 0.0722f32);
         let kg = 1.0 - kr - kb;
-        let (ys, cs) = if full_range { (1.0, 1.0) } else { (219.0 / 255.0, 224.0 / 255.0) };
+        let (ys, cs) = if full_range {
+            (1.0, 1.0)
+        } else {
+            (219.0 / 255.0, 224.0 / 255.0)
+        };
         let coeffs = [
             [kr * ys, kg * ys, kb * ys],
-            [-kr / (2.0 * (1.0 - kb)) * cs, -kg / (2.0 * (1.0 - kb)) * cs, 0.5 * cs],
-            [0.5 * cs, -kg / (2.0 * (1.0 - kr)) * cs, -kb / (2.0 * (1.0 - kr)) * cs],
+            [
+                -kr / (2.0 * (1.0 - kb)) * cs,
+                -kg / (2.0 * (1.0 - kb)) * cs,
+                0.5 * cs,
+            ],
+            [
+                0.5 * cs,
+                -kg / (2.0 * (1.0 - kr)) * cs,
+                -kb / (2.0 * (1.0 - kr)) * cs,
+            ],
         ];
         Ok(Self {
             layout,
@@ -189,7 +221,11 @@ impl TileDiffer {
         let r = self.dispatch(buf, slot);
         self.gl.release()?;
         let changed = r?;
-        Ok(if std::mem::replace(&mut self.primed, true) { changed } else { [true; TILE_COUNT] })
+        Ok(if std::mem::replace(&mut self.primed, true) {
+            changed
+        } else {
+            [true; TILE_COUNT]
+        })
     }
 
     fn dispatch(&mut self, buf: &DmabufBuffer, slot: Option<usize>) -> Result<[bool; TILE_COUNT]> {
@@ -203,15 +239,39 @@ impl TileDiffer {
             gl.use_program(Some(self.program));
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(tex));
-            gl.bind_image_texture(0, Some(self.hashes), 0, false, 0, glow::READ_WRITE, glow::R32UI);
+            gl.bind_image_texture(
+                0,
+                Some(self.hashes),
+                0,
+                false,
+                0,
+                glow::READ_WRITE,
+                glow::R32UI,
+            );
             let loc = |n| glow::NativeUniformLocation(n);
             gl.uniform_2_i32(Some(&loc(0)), l.width as i32, l.height as i32);
             gl.uniform_1_i32(Some(&loc(1)), l.tile_height as i32);
             let rows = match slot {
                 Some(s) => {
                     for (t, ((_, y), (_, uv))) in self.targets[s].iter().enumerate() {
-                        gl.bind_image_texture(1 + t as u32, Some(*y), 0, false, 0, glow::WRITE_ONLY, glow::R8);
-                        gl.bind_image_texture(5 + t as u32, Some(*uv), 0, false, 0, glow::WRITE_ONLY, glow::RG8);
+                        gl.bind_image_texture(
+                            1 + t as u32,
+                            Some(*y),
+                            0,
+                            false,
+                            0,
+                            glow::WRITE_ONLY,
+                            glow::R8,
+                        );
+                        gl.bind_image_texture(
+                            5 + t as u32,
+                            Some(*uv),
+                            0,
+                            false,
+                            0,
+                            glow::WRITE_ONLY,
+                            glow::RG8,
+                        );
                     }
                     let [ky, ku, kv] = self.coeffs;
                     gl.uniform_3_f32(Some(&loc(2)), ky[0], ky[1], ky[2]);
@@ -225,7 +285,12 @@ impl TileDiffer {
             gl.dispatch_compute(l.width.div_ceil(16), rows.div_ceil(16), 1);
             gl.memory_barrier(glow::ALL_BARRIER_BITS);
             // Mapping waits for the dispatch, image writes included.
-            let p = gl.map_buffer_range(glow::SHADER_STORAGE_BUFFER, 0, 4 * TILE_COUNT as i32, glow::MAP_READ_BIT);
+            let p = gl.map_buffer_range(
+                glow::SHADER_STORAGE_BUFFER,
+                0,
+                4 * TILE_COUNT as i32,
+                glow::MAP_READ_BIT,
+            );
             if p.is_null() {
                 bail!("map diff flags: GL error {:#x}", gl.get_error());
             }

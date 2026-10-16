@@ -2,6 +2,7 @@
 //! HEVC encode of the tiled sequence with our own parameter sets and slice headers (packed
 //! headers; radeonsi parses them and re-emits equivalent ones) and explicit references.
 
+#[rustfmt::skip]
 mod sys;
 
 use std::ffi::{CStr, c_int, c_void};
@@ -37,7 +38,9 @@ impl VaapiEncoder {
         let layout = TileLayout::new(width, height);
         let session = Session::new(render_node, layout, cfg)?;
         // Rate changes go out with the next picture, so they can be frequent.
-        Ok(Self { tiles: Tiles::new(session, layout, cfg, true, Duration::from_millis(200))? })
+        Ok(Self {
+            tiles: Tiles::new(session, layout, cfg, true, Duration::from_millis(200))?,
+        })
     }
 }
 
@@ -94,13 +97,20 @@ struct Display {
 impl Display {
     fn open(node: &Path) -> Result<Self> {
         load()?;
-        let fd = OpenOptions::new().read(true).write(true).open(node).with_context(|| format!("open {}", node.display()))?;
+        let fd = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(node)
+            .with_context(|| format!("open {}", node.display()))?;
         let dpy = unsafe { va().vaGetDisplayDRM(fd.as_raw_fd()) };
         if dpy.is_null() {
             bail!("vaGetDisplayDRM failed");
         }
         let (mut maj, mut min) = (0, 0);
-        check(unsafe { va().vaInitialize(dpy, &mut maj, &mut min) }, "vaInitialize")?;
+        check(
+            unsafe { va().vaInitialize(dpy, &mut maj, &mut min) },
+            "vaInitialize",
+        )?;
         Ok(Self { dpy, _fd: fd })
     }
 
@@ -108,7 +118,12 @@ impl Display {
         let mut eps = [0 as c_int; 32];
         let mut n = 0;
         let r = unsafe {
-            va().vaQueryConfigEntrypoints(self.dpy, VAProfile::VAProfileHEVCMain, eps.as_mut_ptr().cast(), &mut n)
+            va().vaQueryConfigEntrypoints(
+                self.dpy,
+                VAProfile::VAProfileHEVCMain,
+                eps.as_mut_ptr().cast(),
+                &mut n,
+            )
         };
         let eps = &eps[..n.clamp(0, 32) as usize];
         if r != 0 {
@@ -178,7 +193,9 @@ impl Session {
     fn new(node: &Path, layout: TileLayout, cfg: &EncoderConfig) -> Result<Self> {
         let display = Display::open(node)?;
         let dpy = display.dpy;
-        let entrypoint = display.hevc_entrypoint().context("no VAAPI HEVC encode entrypoint")?;
+        let entrypoint = display
+            .hevc_entrypoint()
+            .context("no VAAPI HEVC encode entrypoint")?;
         let seq = SeqConfig {
             width: layout.width,
             height: layout.tile_height,
@@ -187,19 +204,43 @@ impl Session {
             cu_qp_delta: cfg.bitrate_bps.is_some(),
             sao: cfg.sao,
         };
-        let rc_mode = if cfg.bitrate_bps.is_some() { VA_RC_VBR } else { VA_RC_CQP };
+        let rc_mode = if cfg.bitrate_bps.is_some() {
+            VA_RC_VBR
+        } else {
+            VA_RC_CQP
+        };
 
         let mut attribs = [
-            VAConfigAttrib { type_: VAConfigAttribType::VAConfigAttribRTFormat, value: 0 },
-            VAConfigAttrib { type_: VAConfigAttribType::VAConfigAttribRateControl, value: 0 },
-            VAConfigAttrib { type_: VAConfigAttribType::VAConfigAttribEncPackedHeaders, value: 0 },
+            VAConfigAttrib {
+                type_: VAConfigAttribType::VAConfigAttribRTFormat,
+                value: 0,
+            },
+            VAConfigAttrib {
+                type_: VAConfigAttribType::VAConfigAttribRateControl,
+                value: 0,
+            },
+            VAConfigAttrib {
+                type_: VAConfigAttribType::VAConfigAttribEncPackedHeaders,
+                value: 0,
+            },
         ];
         check(
-            unsafe { va().vaGetConfigAttributes(dpy, VAProfile::VAProfileHEVCMain, entrypoint, attribs.as_mut_ptr(), 3) },
+            unsafe {
+                va().vaGetConfigAttributes(
+                    dpy,
+                    VAProfile::VAProfileHEVCMain,
+                    entrypoint,
+                    attribs.as_mut_ptr(),
+                    3,
+                )
+            },
             "vaGetConfigAttributes",
         )?;
         let packed = VA_ENC_PACKED_HEADER_SEQUENCE | VA_ENC_PACKED_HEADER_SLICE;
-        if attribs[0].value & VA_RT_FORMAT_YUV420 == 0 || attribs[1].value & rc_mode == 0 || attribs[2].value & packed != packed {
+        if attribs[0].value & VA_RT_FORMAT_YUV420 == 0
+            || attribs[1].value & rc_mode == 0
+            || attribs[2].value & packed != packed
+        {
             bail!(
                 "driver lacks HEVC encode features: rt {:#x} rc {:#x} packed {:#x}",
                 attribs[0].value,
@@ -238,15 +279,40 @@ impl Session {
         let (cw, ch) = (s.seq.coded_width(), s.seq.coded_height());
         unsafe {
             check(
-                va().vaCreateConfig(dpy, VAProfile::VAProfileHEVCMain, entrypoint, attribs.as_mut_ptr(), 3, &mut s.enc_config),
+                va().vaCreateConfig(
+                    dpy,
+                    VAProfile::VAProfileHEVCMain,
+                    entrypoint,
+                    attribs.as_mut_ptr(),
+                    3,
+                    &mut s.enc_config,
+                ),
                 "va().vaCreateConfig(HEVC encode)",
             )?;
             check(
-                va().vaCreateSurfaces(dpy, VA_RT_FORMAT_YUV420, cw, ch, s.inputs.as_mut_ptr(), s.inputs.len() as u32, ptr::null_mut(), 0),
+                va().vaCreateSurfaces(
+                    dpy,
+                    VA_RT_FORMAT_YUV420,
+                    cw,
+                    ch,
+                    s.inputs.as_mut_ptr(),
+                    s.inputs.len() as u32,
+                    ptr::null_mut(),
+                    0,
+                ),
                 "create input surfaces",
             )?;
             check(
-                va().vaCreateSurfaces(dpy, VA_RT_FORMAT_YUV420, cw, ch, s.recon.as_mut_ptr(), RECON_SURFACES as u32, ptr::null_mut(), 0),
+                va().vaCreateSurfaces(
+                    dpy,
+                    VA_RT_FORMAT_YUV420,
+                    cw,
+                    ch,
+                    s.recon.as_mut_ptr(),
+                    RECON_SURFACES as u32,
+                    ptr::null_mut(),
+                    0,
+                ),
                 "create reconstructed surfaces",
             )?;
             let mut targets: Vec<VASurfaceID> = s.inputs.iter().chain(&s.recon).copied().collect();
@@ -266,16 +332,40 @@ impl Session {
             let coded_size = cw * ch * 3 / 2 + (1 << 16);
             for c in &mut s.coded {
                 check(
-                    va().vaCreateBuffer(dpy, s.enc_ctx, VABufferType::VAEncCodedBufferType, coded_size, 1, ptr::null_mut(), c),
+                    va().vaCreateBuffer(
+                        dpy,
+                        s.enc_ctx,
+                        VABufferType::VAEncCodedBufferType,
+                        coded_size,
+                        1,
+                        ptr::null_mut(),
+                        c,
+                    ),
                     "create coded buffer",
                 )?;
             }
             check(
-                va().vaCreateConfig(dpy, VAProfile::VAProfileNone, VAEntrypoint::VAEntrypointVideoProc, ptr::null_mut(), 0, &mut s.vpp_config),
+                va().vaCreateConfig(
+                    dpy,
+                    VAProfile::VAProfileNone,
+                    VAEntrypoint::VAEntrypointVideoProc,
+                    ptr::null_mut(),
+                    0,
+                    &mut s.vpp_config,
+                ),
                 "va().vaCreateConfig(VideoProc)",
             )?;
             check(
-                va().vaCreateContext(dpy, s.vpp_config, cw as c_int, ch as c_int, 0, ptr::null_mut(), 0, &mut s.vpp_ctx),
+                va().vaCreateContext(
+                    dpy,
+                    s.vpp_config,
+                    cw as c_int,
+                    ch as c_int,
+                    0,
+                    ptr::null_mut(),
+                    0,
+                    &mut s.vpp_ctx,
+                ),
                 "va().vaCreateContext(VideoProc)",
             )?;
         }
@@ -312,12 +402,23 @@ impl Session {
         let (y, rows, w) = (l.tile_y(t), l.tile_rows(t), l.width);
         self.vpp(src, rect(y, rows, w), dst, rect(0, rows, w))?;
         if rows < l.tile_height {
-            self.vpp(src, rect(y + rows - 1, 1, w), dst, rect(rows, l.tile_height - rows, w))?;
+            self.vpp(
+                src,
+                rect(y + rows - 1, 1, w),
+                dst,
+                rect(rows, l.tile_height - rows, w),
+            )?;
         }
         Ok(())
     }
 
-    fn vpp(&self, src: VASurfaceID, src_rect: VARectangle, dst: VASurfaceID, dst_rect: VARectangle) -> Result<()> {
+    fn vpp(
+        &self,
+        src: VASurfaceID,
+        src_rect: VARectangle,
+        dst: VASurfaceID,
+        dst_rect: VARectangle,
+    ) -> Result<()> {
         let mut p: VAProcPipelineParameterBuffer = unsafe { std::mem::zeroed() };
         p.surface = src;
         p.surface_region = &src_rect;
@@ -326,10 +427,17 @@ impl Session {
         p.output_background_color = 0xff00_0000;
         p.output_color_standard = _VAProcColorStandardType_VAProcColorStandardBT709;
         p.input_color_properties.color_range = VA_SOURCE_RANGE_FULL as u8;
-        p.output_color_properties.color_range =
-            if self.cfg.color.full_range { VA_SOURCE_RANGE_FULL } else { VA_SOURCE_RANGE_REDUCED } as u8;
+        p.output_color_properties.color_range = if self.cfg.color.full_range {
+            VA_SOURCE_RANGE_FULL
+        } else {
+            VA_SOURCE_RANGE_REDUCED
+        } as u8;
         p.output_color_properties.matrix_coefficients = 1;
-        let buf = self.buffer(self.vpp_ctx, VABufferType::VAProcPipelineParameterBufferType, &mut p)?;
+        let buf = self.buffer(
+            self.vpp_ctx,
+            VABufferType::VAProcPipelineParameterBufferType,
+            &mut p,
+        )?;
         let r = self.picture(self.vpp_ctx, dst, &[buf]);
         unsafe { va().vaDestroyBuffer(self.dpy(), buf) };
         r
@@ -339,9 +447,18 @@ impl Session {
         self.raw_buffer(ctx, ty, (data as *mut T).cast(), size_of::<T>())
     }
 
-    fn raw_buffer(&self, ctx: VAContextID, ty: VABufferType, data: *mut c_void, size: usize) -> Result<VABufferID> {
+    fn raw_buffer(
+        &self,
+        ctx: VAContextID,
+        ty: VABufferType,
+        data: *mut c_void,
+        size: usize,
+    ) -> Result<VABufferID> {
         let mut id = VA_INVALID_ID;
-        check(unsafe { va().vaCreateBuffer(self.dpy(), ctx, ty, size as u32, 1, data, &mut id) }, "vaCreateBuffer")?;
+        check(
+            unsafe { va().vaCreateBuffer(self.dpy(), ctx, ty, size as u32, 1, data, &mut id) },
+            "vaCreateBuffer",
+        )?;
         Ok(id)
     }
 
@@ -350,7 +467,10 @@ impl Session {
         unsafe {
             check(va().vaBeginPicture(dpy, ctx, target), "vaBeginPicture")?;
             let mut b = bufs.to_vec();
-            let r = check(va().vaRenderPicture(dpy, ctx, b.as_mut_ptr(), b.len() as c_int), "vaRenderPicture");
+            let r = check(
+                va().vaRenderPicture(dpy, ctx, b.as_mut_ptr(), b.len() as c_int),
+                "vaRenderPicture",
+            );
             let e = check(va().vaEndPicture(dpy, ctx), "vaEndPicture");
             r.and(e)
         }
@@ -362,8 +482,15 @@ impl Session {
             ty: u32,
             payload: T,
         }
-        let mut m = Misc { ty: ty as u32, payload };
-        self.buffer(self.enc_ctx, VABufferType::VAEncMiscParameterBufferType, &mut m)
+        let mut m = Misc {
+            ty: ty as u32,
+            payload,
+        };
+        self.buffer(
+            self.enc_ctx,
+            VABufferType::VAEncMiscParameterBufferType,
+            &mut m,
+        )
     }
 
     fn packed(&self, ty: u32, nals: &[u8]) -> Result<[VABufferID; 2]> {
@@ -373,7 +500,11 @@ impl Session {
             has_emulation_bytes: 1,
             va_reserved: [0; 4],
         };
-        let p = self.buffer(self.enc_ctx, VABufferType::VAEncPackedHeaderParameterBufferType, &mut param)?;
+        let p = self.buffer(
+            self.enc_ctx,
+            VABufferType::VAEncPackedHeaderParameterBufferType,
+            &mut param,
+        )?;
         let d = self.raw_buffer(
             self.enc_ctx,
             VABufferType::VAEncPackedHeaderDataBufferType,
@@ -396,8 +527,15 @@ impl Session {
             rc.bits_per_second = max;
             rc.target_percentage = (target as u64 * 100 / max.max(1) as u64) as u32;
             rc.window_size = 1000;
-            out.push(self.misc(VAEncMiscParameterType::VAEncMiscParameterTypeRateControl, rc)?);
-            let hrd = VAEncMiscParameterHRD { initial_buffer_fullness: max / 2, buffer_size: max, va_reserved: [0; 4] };
+            out.push(self.misc(
+                VAEncMiscParameterType::VAEncMiscParameterTypeRateControl,
+                rc,
+            )?);
+            let hrd = VAEncMiscParameterHRD {
+                initial_buffer_fullness: max / 2,
+                buffer_size: max,
+                va_reserved: [0; 4],
+            };
             out.push(self.misc(VAEncMiscParameterType::VAEncMiscParameterTypeHRD, hrd)?);
         }
         Ok(out)
@@ -439,7 +577,13 @@ impl Session {
     }
 
     /// Submits one picture; returns whether it is intra.
-    fn submit_pic(&mut self, pic: TilePic, input: VASurfaceID, coded: VABufferID, taken: &mut Vec<VASurfaceID>) -> Result<bool> {
+    fn submit_pic(
+        &mut self,
+        pic: TilePic,
+        input: VASurfaceID,
+        coded: VABufferID,
+        taken: &mut Vec<VASurfaceID>,
+    ) -> Result<bool> {
         let t = pic.tile;
         let kind = match pic.kind {
             PicKind::Inter if self.latest[t].is_none() => PicKind::Intra,
@@ -461,8 +605,17 @@ impl Session {
             .filter(|&(_, own)| !(own && kind != PicKind::Inter))
             .collect();
         keep.sort_by_key(|(r, _)| std::cmp::Reverse(r.poc));
-        let rps: Vec<RpsEntry> = keep.iter().map(|&(r, used)| RpsEntry { distance: poc - r.poc, used }).collect();
-        if rps.last().is_some_and(|e| e.distance > hevc::MAX_REF_DISTANCE) {
+        let rps: Vec<RpsEntry> = keep
+            .iter()
+            .map(|&(r, used)| RpsEntry {
+                distance: poc - r.poc,
+                used,
+            })
+            .collect();
+        if rps
+            .last()
+            .is_some_and(|e| e.distance > hevc::MAX_REF_DISTANCE)
+        {
             bail!("reference out of short-term range");
         }
 
@@ -471,24 +624,45 @@ impl Session {
             PicKind::Intra => (hevc::NAL_TRAIL_R, SliceType::I),
             PicKind::Inter => (hevc::NAL_TRAIL_R, SliceType::P),
         };
-        let qp_delta = if self.rc_mode == VA_RC_CQP { self.cfg.qp as i32 - 26 } else { 0 };
+        let qp_delta = if self.rc_mode == VA_RC_CQP {
+            self.cfg.qp as i32 - 26
+        } else {
+            0
+        };
 
         let mut bufs = Vec::new();
         let r = (|| -> Result<()> {
             if kind == PicKind::Idr {
                 let mut sp = self.seq_params();
-                bufs.push(self.buffer(self.enc_ctx, VABufferType::VAEncSequenceParameterBufferType, &mut sp)?);
+                bufs.push(self.buffer(
+                    self.enc_ctx,
+                    VABufferType::VAEncSequenceParameterBufferType,
+                    &mut sp,
+                )?);
                 self.send_rate = true;
             }
             if std::mem::take(&mut self.send_rate) {
                 bufs.extend(self.rate_buffers()?);
             }
 
-            let invalid = VAPictureHEVC { picture_id: VA_INVALID_SURFACE, pic_order_cnt: 0, flags: VA_PICTURE_HEVC_INVALID, va_reserved: [0; 4] };
-            let vapic = |r: Ref| VAPictureHEVC { picture_id: r.surface, pic_order_cnt: r.poc as i32, flags: 0, va_reserved: [0; 4] };
+            let invalid = VAPictureHEVC {
+                picture_id: VA_INVALID_SURFACE,
+                pic_order_cnt: 0,
+                flags: VA_PICTURE_HEVC_INVALID,
+                va_reserved: [0; 4],
+            };
+            let vapic = |r: Ref| VAPictureHEVC {
+                picture_id: r.surface,
+                pic_order_cnt: r.poc as i32,
+                flags: 0,
+                va_reserved: [0; 4],
+            };
 
             let mut pp: VAEncPictureParameterBufferHEVC = unsafe { std::mem::zeroed() };
-            pp.decoded_curr_pic = vapic(Ref { surface: recon, poc });
+            pp.decoded_curr_pic = vapic(Ref {
+                surface: recon,
+                poc,
+            });
             pp.reference_frames = [invalid; 15];
             for (i, (r, _)) in keep.iter().enumerate() {
                 pp.reference_frames[i] = vapic(*r);
@@ -505,7 +679,11 @@ impl Session {
             f.set_transform_skip_enabled_flag(1);
             f.set_cu_qp_delta_enabled_flag(self.seq.cu_qp_delta as u32);
             f.set_pps_loop_filter_across_slices_enabled_flag(1);
-            bufs.push(self.buffer(self.enc_ctx, VABufferType::VAEncPictureParameterBufferType, &mut pp)?);
+            bufs.push(self.buffer(
+                self.enc_ctx,
+                VABufferType::VAEncPictureParameterBufferType,
+                &mut pp,
+            )?);
 
             let mut sl: VAEncSliceParameterBufferHEVC = unsafe { std::mem::zeroed() };
             sl.num_ctu_in_slice = self.seq.ctus();
@@ -522,13 +700,25 @@ impl Session {
             f.set_slice_sao_luma_flag(self.seq.sao as u32);
             f.set_slice_sao_chroma_flag(self.seq.sao as u32);
             f.set_slice_loop_filter_across_slices_enabled_flag(1);
-            bufs.push(self.buffer(self.enc_ctx, VABufferType::VAEncSliceParameterBufferType, &mut sl)?);
+            bufs.push(self.buffer(
+                self.enc_ctx,
+                VABufferType::VAEncSliceParameterBufferType,
+                &mut sl,
+            )?);
 
             if kind == PicKind::Idr {
                 let ps = [self.seq.vps(), self.seq.sps(), self.seq.pps()].concat();
                 bufs.extend(self.packed(1, &ps)?); // VAEncPackedHeaderSequence
             }
-            let sh = SliceHeader { nal_type, slice_type, poc, rps: &rps, qp_delta, sao: self.seq.sao }.write();
+            let sh = SliceHeader {
+                nal_type,
+                slice_type,
+                poc,
+                rps: &rps,
+                qp_delta,
+                sao: self.seq.sao,
+            }
+            .write();
             bufs.extend(self.packed(3, &sh)?); // VAEncPackedHeaderSlice
 
             self.picture(self.enc_ctx, input, &bufs)
@@ -537,7 +727,10 @@ impl Session {
             unsafe { va().vaDestroyBuffer(self.dpy(), b) };
         }
         r?;
-        self.latest[t] = Some(Ref { surface: recon, poc });
+        self.latest[t] = Some(Ref {
+            surface: recon,
+            poc,
+        });
         Ok(kind != PicKind::Inter)
     }
 }
@@ -561,7 +754,12 @@ impl Backend for Session {
             Some(s) => s,
             None => self.take_slot()?,
         };
-        match self.fused.as_mut().unwrap().diff_convert(&frame.buffer, slot) {
+        match self
+            .fused
+            .as_mut()
+            .unwrap()
+            .diff_convert(&frame.buffer, slot)
+        {
             Ok(changed) => {
                 self.prepared = Some(slot);
                 Ok(Some(changed))
@@ -591,11 +789,22 @@ impl Backend for Session {
                 }
             }
             let mut taken = Vec::new();
-            let mut job = Job { slot, pics: Vec::new(), submitted: Instant::now(), meta: None };
+            let mut job = Job {
+                slot,
+                pics: Vec::new(),
+                submitted: Instant::now(),
+                meta: None,
+            };
             for (i, &p) in pics.iter().enumerate() {
-                let (input, coded) = (self.inputs[slot * TILE_COUNT + p.tile], self.coded[slot * TILE_COUNT + i]);
+                let (input, coded) = (
+                    self.inputs[slot * TILE_COUNT + p.tile],
+                    self.coded[slot * TILE_COUNT + i],
+                );
                 if converted.is_none() {
-                    check(unsafe { va().vaSyncSurface(self.dpy(), input) }, "vaSyncSurface")?;
+                    check(
+                        unsafe { va().vaSyncSurface(self.dpy(), input) },
+                        "vaSyncSurface",
+                    )?;
                 }
                 if i == 0 {
                     job.submitted = Instant::now();
@@ -604,15 +813,23 @@ impl Backend for Session {
                 let keyframe = self.submit_pic(p, input, coded, &mut taken)?;
                 job.pics.push((p.tile as u8, keyframe, coded));
             }
-            job.meta = Some(std::mem::replace(&mut meta, EncodedFrame {
-                seq: 0,
-                changed_tiles: [false; TILE_COUNT],
-                tiles: Vec::new(),
-                timings: Default::default(),
-                presented: None,
-                frame_size: (0, 0),
-            }));
-            self.collector()?.jobs.as_ref().unwrap().send(job).map_err(|_| anyhow::anyhow!("encode collector died"))?;
+            job.meta = Some(std::mem::replace(
+                &mut meta,
+                EncodedFrame {
+                    seq: 0,
+                    changed_tiles: [false; TILE_COUNT],
+                    tiles: Vec::new(),
+                    timings: Default::default(),
+                    presented: None,
+                    frame_size: (0, 0),
+                },
+            ));
+            self.collector()?
+                .jobs
+                .as_ref()
+                .unwrap()
+                .send(job)
+                .map_err(|_| anyhow::anyhow!("encode collector died"))?;
             Ok(())
         })();
         if r.is_err() {
@@ -692,7 +909,11 @@ impl Session {
         match self.free_slots.pop() {
             Some(s) => Ok(s),
             // Both slots queued: wait for the collector to finish the older frame.
-            None => self.collector()?.free.recv().map_err(|_| anyhow::anyhow!("encode collector died")),
+            None => self
+                .collector()?
+                .free
+                .recv()
+                .map_err(|_| anyhow::anyhow!("encode collector died")),
         }
     }
 
@@ -737,7 +958,10 @@ impl Session {
                     }
                 };
                 let (w, h) = (d.width, d.height);
-                targets.push(Nv12Target { y: plane(0, w, h), uv: plane(1, w / 2, h / 2) });
+                targets.push(Nv12Target {
+                    y: plane(0, w, h),
+                    uv: plane(1, w / 2, h / 2),
+                });
             }
             slots.push(targets);
         }
@@ -798,35 +1022,48 @@ impl Collector {
         let (size_tx, sizes) = mpsc::channel();
         let output: Output = Default::default();
         let out = output.clone();
-        let thread = std::thread::Builder::new().name("hevc-collect".into()).spawn(move || {
-            let dpy = dpy;
-            for mut job in job_rx {
-                let r = job
-                    .pics
-                    .iter()
-                    .map(|&(index, keyframe, buf)| {
-                        let data = unsafe { read_coded(dpy.0, buf)? };
-                        Ok(EncodedTile { index, keyframe, data: nal::strip_sei(&data) })
-                    })
-                    .collect::<Result<Vec<_>>>()
-                    .map(|tiles| {
-                        let mut f = job.meta.take().expect("job without metadata");
-                        f.timings.encode = job.submitted.elapsed();
-                        let _ = size_tx.send(tiles.iter().map(|t| t.data.len()).sum());
-                        f.tiles = tiles;
-                        f
-                    });
-                let _ = free_tx.send(job.slot);
-                let sent = match &*out.lock().unwrap() {
-                    Some(tx) => tx.send(r).is_ok(),
-                    None => res_tx.send(r).is_ok(),
-                };
-                if !sent {
-                    break;
+        let thread = std::thread::Builder::new()
+            .name("hevc-collect".into())
+            .spawn(move || {
+                let dpy = dpy;
+                for mut job in job_rx {
+                    let r = job
+                        .pics
+                        .iter()
+                        .map(|&(index, keyframe, buf)| {
+                            let data = unsafe { read_coded(dpy.0, buf)? };
+                            Ok(EncodedTile {
+                                index,
+                                keyframe,
+                                data: nal::strip_sei(&data),
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()
+                        .map(|tiles| {
+                            let mut f = job.meta.take().expect("job without metadata");
+                            f.timings.encode = job.submitted.elapsed();
+                            let _ = size_tx.send(tiles.iter().map(|t| t.data.len()).sum());
+                            f.tiles = tiles;
+                            f
+                        });
+                    let _ = free_tx.send(job.slot);
+                    let sent = match &*out.lock().unwrap() {
+                        Some(tx) => tx.send(r).is_ok(),
+                        None => res_tx.send(r).is_ok(),
+                    };
+                    if !sent {
+                        break;
+                    }
                 }
-            }
-        })?;
-        Ok(Self { jobs: Some(jobs), results, free, sizes, output, thread: Some(thread) })
+            })?;
+        Ok(Self {
+            jobs: Some(jobs),
+            results,
+            free,
+            sizes,
+            output,
+            thread: Some(thread),
+        })
     }
 }
 
@@ -855,7 +1092,10 @@ unsafe fn read_coded(dpy: VADisplay, buf: VABufferID) -> Result<Vec<u8>> {
         check(va().vaMapBuffer(dpy, buf, &mut seg), "map coded buffer")?;
         while !seg.is_null() {
             let s = &*(seg as *const VACodedBufferSegment);
-            data.extend_from_slice(std::slice::from_raw_parts(s.buf as *const u8, s.size as usize));
+            data.extend_from_slice(std::slice::from_raw_parts(
+                s.buf as *const u8,
+                s.size as usize,
+            ));
             seg = s.next;
         }
         va().vaUnmapBuffer(dpy, buf);
@@ -864,7 +1104,12 @@ unsafe fn read_coded(dpy: VADisplay, buf: VABufferID) -> Result<Vec<u8>> {
 }
 
 fn rect(y: u32, height: u32, width: u32) -> VARectangle {
-    VARectangle { x: 0, y: y as i16, width: width as u16, height: height as u16 }
+    VARectangle {
+        x: 0,
+        y: y as i16,
+        width: width as u16,
+        height: height as u16,
+    }
 }
 
 static VA: OnceLock<Result<Va, String>> = OnceLock::new();
@@ -877,7 +1122,9 @@ fn load() -> Result<&'static Va> {
 
 /// Only valid once `Display::open` has loaded libva.
 fn va() -> &'static Va {
-    VA.get().and_then(|r| r.as_ref().ok()).expect("libva not loaded")
+    VA.get()
+        .and_then(|r| r.as_ref().ok())
+        .expect("libva not loaded")
 }
 
 fn check(status: VAStatus, what: &str) -> Result<()> {
@@ -942,7 +1189,16 @@ unsafe fn import_dmabuf(dpy: VADisplay, buf: &DmabufBuffer) -> Result<VASurfaceI
     let mut surface = VA_INVALID_SURFACE;
     check(
         unsafe {
-            va().vaCreateSurfaces(dpy, VA_RT_FORMAT_RGB32, buf.width, buf.height, &mut surface, 1, attribs.as_mut_ptr(), 2)
+            va().vaCreateSurfaces(
+                dpy,
+                VA_RT_FORMAT_RGB32,
+                buf.width,
+                buf.height,
+                &mut surface,
+                1,
+                attribs.as_mut_ptr(),
+                2,
+            )
         },
         "import dmabuf as VA surface",
     )?;

@@ -18,7 +18,11 @@ const TABLE: &[(&str, &str, &[&str])] = &[
     ("public.png", PNG, &[]),
     ("public.jpeg", JPEG, &[]),
     ("public.tiff", TIFF, &[]),
-    ("public.utf8-plain-text", TEXT, &["UTF8_STRING", "text/plain"]),
+    (
+        "public.utf8-plain-text",
+        TEXT,
+        &["UTF8_STRING", "text/plain"],
+    ),
 ];
 
 /// Clipboard content as canonical MIME type -> bytes, in preference order.
@@ -31,11 +35,15 @@ impl ClipContent {
     }
 
     pub fn get(&self, mime: &str) -> Option<&[u8]> {
-        self.0.iter().find(|(m, _)| m == mime).map(|(_, d)| d.as_slice())
+        self.0
+            .iter()
+            .find(|(m, _)| m == mime)
+            .map(|(_, d)| d.as_slice())
     }
 
     pub fn as_text(&self) -> Option<String> {
-        self.get(TEXT).map(|b| String::from_utf8_lossy(b).into_owned())
+        self.get(TEXT)
+            .map(|b| String::from_utf8_lossy(b).into_owned())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -53,10 +61,15 @@ impl ClipContent {
 
     /// First pasteboard item, mapped to the MIME types we bridge.
     pub fn from_items(items: &[Item]) -> Self {
-        let Some(item) = items.first() else { return Self::default() };
+        let Some(item) = items.first() else {
+            return Self::default();
+        };
         let mut out = Vec::new();
         for &(uti, mime, _) in TABLE {
-            if let Some(f) = item.iter().find(|f| f.uti == uti || (f.uti.is_empty() && f.tag(UTI_MIME_TAG) == Some(mime))) {
+            if let Some(f) = item
+                .iter()
+                .find(|f| f.uti == uti || (f.uti.is_empty() && f.tag(UTI_MIME_TAG) == Some(mime)))
+            {
                 out.push((mime.to_string(), f.data.clone()));
             }
         }
@@ -109,7 +122,12 @@ pub fn canonical(name: &str) -> Option<&'static str> {
 }
 
 fn utf16le_to_utf8(b: &[u8]) -> String {
-    let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+    let units: Vec<u16> = b
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| u16::from_le_bytes(*c))
+        .collect();
     let s = String::from_utf16_lossy(&units);
     s.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(s)
 }
@@ -119,7 +137,11 @@ mod tests {
     use super::*;
 
     fn flavor(uti: &str, data: &[u8]) -> Flavor {
-        Flavor { uti: uti.into(), data: data.to_vec(), ..Default::default() }
+        Flavor {
+            uti: uti.into(),
+            data: data.to_vec(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -133,11 +155,18 @@ mod tests {
         let c = ClipContent::from_items(&[item]);
         assert_eq!(
             c.summary(),
-            [(RTF.to_string(), 13), (HTML.to_string(), 12), (TEXT.to_string(), 5)]
+            [
+                (RTF.to_string(), 13),
+                (HTML.to_string(), 12),
+                (TEXT.to_string(), 5)
+            ]
         );
         let back = c.to_items();
         let utis: Vec<_> = back[0].iter().map(|f| f.uti.as_str()).collect();
-        assert_eq!(utis, ["public.rtf", "public.html", "public.utf8-plain-text"]);
+        assert_eq!(
+            utis,
+            ["public.rtf", "public.html", "public.utf8-plain-text"]
+        );
         assert_eq!(back[0][2].tag("public.mime-type"), Some(TEXT));
     }
 
@@ -148,7 +177,10 @@ mod tests {
         assert_eq!(c.as_text().as_deref(), Some("héllo"));
         let mut png = flavor("", b"\x89PNG");
         png.tags.push(("public.mime-type".into(), PNG.into()));
-        assert_eq!(ClipContent::from_items(&[vec![png]]).get(PNG), Some(&b"\x89PNG"[..]));
+        assert_eq!(
+            ClipContent::from_items(&[vec![png]]).get(PNG),
+            Some(&b"\x89PNG"[..])
+        );
     }
 
     #[test]

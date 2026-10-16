@@ -11,7 +11,10 @@ const IMAGE_CHUNK: u32 = 0xfffd_0002;
 /// The theme's default pointer for a display at `scale`.
 pub fn default_pointer(scale: f64) -> Result<CursorImage> {
     let theme = std::env::var("XCURSOR_THEME").unwrap_or_else(|_| "default".into());
-    let size = std::env::var("XCURSOR_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(24u32);
+    let size = std::env::var("XCURSOR_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(24u32);
     let path = ["default", "left_ptr"]
         .iter()
         .find_map(|name| find(&theme, name, &search_dirs()))
@@ -59,8 +62,15 @@ fn find(theme: &str, name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
 
 fn inherits(index: &Path) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(index).ok()?;
-    let line = text.lines().find_map(|l| l.trim().strip_prefix("Inherits="))?;
-    Some(line.split([',', ';']).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+    let line = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("Inherits="))?;
+    Some(
+        line.split([',', ';'])
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+    )
 }
 
 /// The first image of the nominal size closest to `size`, with straight alpha.
@@ -85,12 +95,21 @@ pub fn parse(data: &[u8], size: u32) -> Result<CursorImage> {
     }
     let (_, pos) = best.context("XCursor file has no images")?;
     let (w, h) = (u32_at(pos + 16)?, u32_at(pos + 20)?);
-    ensure!((1..=256).contains(&w) && (1..=256).contains(&h), "cursor image {w}x{h} out of range");
+    ensure!(
+        (1..=256).contains(&w) && (1..=256).contains(&h),
+        "cursor image {w}x{h} out of range"
+    );
     let (xhot, yhot) = (u32_at(pos + 24)?.min(w - 1), u32_at(pos + 28)?.min(h - 1));
     let pixels = (0..(w * h) as usize)
         .map(|i| u32_at(pos + 36 + 4 * i).map(unpremultiply))
         .collect::<Result<Vec<_>>>()?;
-    Ok(CursorImage { serial: 1, width: w as u16, height: h as u16, hotspot: (xhot as u16, yhot as u16), pixels })
+    Ok(CursorImage {
+        serial: 1,
+        width: w as u16,
+        height: h as u16,
+        hotspot: (xhot as u16, yhot as u16),
+        pixels,
+    })
 }
 
 fn unpremultiply(p: u32) -> u32 {
@@ -144,10 +163,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("base/cursors")).unwrap();
         std::fs::create_dir_all(root.join("default")).unwrap();
-        std::fs::write(root.join("default/index.theme"), "[Icon Theme]\nInherits=missing,base\n").unwrap();
+        std::fs::write(
+            root.join("default/index.theme"),
+            "[Icon Theme]\nInherits=missing,base\n",
+        )
+        .unwrap();
         std::fs::write(root.join("base/cursors/left_ptr"), b"x").unwrap();
         let dirs = [root.clone()];
-        assert_eq!(find("default", "left_ptr", &dirs), Some(root.join("base/cursors/left_ptr")));
+        assert_eq!(
+            find("default", "left_ptr", &dirs),
+            Some(root.join("base/cursors/left_ptr"))
+        );
         assert_eq!(find("default", "default", &dirs), None);
         std::fs::remove_dir_all(&root).unwrap();
     }

@@ -50,7 +50,11 @@ impl BitWriter {
     }
 
     pub fn se(&mut self, v: i32) {
-        self.ue(if v > 0 { 2 * v as u32 - 1 } else { 2 * v.unsigned_abs() });
+        self.ue(if v > 0 {
+            2 * v as u32 - 1
+        } else {
+            2 * v.unsigned_abs()
+        });
     }
 
     /// rbsp_trailing_bits / byte_alignment: a one bit, then zeros to the byte boundary.
@@ -124,7 +128,10 @@ impl SeqConfig {
             (183, 35_651_584, 2_139_095_040),
             (186, 35_651_584, 4_278_190_080),
         ];
-        LEVELS.iter().find(|&&(_, mps, msr)| ps <= mps && sr <= msr).map_or(186, |l| l.0)
+        LEVELS
+            .iter()
+            .find(|&&(_, mps, msr)| ps <= mps && sr <= msr)
+            .map_or(186, |l| l.0)
     }
 
     pub fn primaries(&self) -> u8 {
@@ -187,7 +194,10 @@ impl SeqConfig {
         w.ue(1); // chroma_format_idc 4:2:0
         w.ue(self.coded_width());
         w.ue(self.coded_height());
-        let (crop_r, crop_b) = (self.coded_width() - self.width, self.coded_height() - self.height);
+        let (crop_r, crop_b) = (
+            self.coded_width() - self.width,
+            self.coded_height() - self.height,
+        );
         w.flag(crop_r > 0 || crop_b > 0);
         if crop_r > 0 || crop_b > 0 {
             w.ue(0);
@@ -317,7 +327,10 @@ impl SliceHeader<'_> {
         w.ue(0); // slice_pic_parameter_set_id
         w.ue(self.slice_type as u32);
         if self.nal_type != NAL_IDR_W_RADL {
-            w.u(LOG2_MAX_POC_LSB, (self.poc % (1 << LOG2_MAX_POC_LSB)) as u64);
+            w.u(
+                LOG2_MAX_POC_LSB,
+                (self.poc % (1 << LOG2_MAX_POC_LSB)) as u64,
+            );
             w.flag(false); // short_term_ref_pic_set_sps_flag
             // st_ref_pic_set(num_short_term_ref_pic_sets = 0): no inter-RPS prediction.
             w.ue(self.rps.len() as u32);
@@ -360,19 +373,42 @@ mod tests {
     #[test]
     fn exp_golomb() {
         // ue(0)=1, ue(1)=010, ue(4)=00101, then the stop bit.
-        assert_eq!(bits(|w| { w.ue(0); w.ue(1); w.ue(4); }), [0b1010_0010, 0b1100_0000]);
+        assert_eq!(
+            bits(|w| {
+                w.ue(0);
+                w.ue(1);
+                w.ue(4);
+            }),
+            [0b1010_0010, 0b1100_0000]
+        );
         // se(1)=010, se(-1)=011
-        assert_eq!(bits(|w| { w.se(1); w.se(-1); }), [0b0100_1110]);
+        assert_eq!(
+            bits(|w| {
+                w.se(1);
+                w.se(-1);
+            }),
+            [0b0100_1110]
+        );
     }
 
     #[test]
     fn emulation_prevention() {
-        assert_eq!(nal(1, &[0, 0, 1, 0, 0, 0, 5]), [0, 0, 0, 1, 2, 1, 0, 0, 3, 1, 0, 0, 3, 0, 5]);
+        assert_eq!(
+            nal(1, &[0, 0, 1, 0, 0, 0, 5]),
+            [0, 0, 0, 1, 2, 1, 0, 0, 3, 1, 0, 0, 3, 0, 5]
+        );
     }
 
     #[test]
     fn levels() {
-        let c = |w, h, r| SeqConfig { width: w, height: h, pic_rate: r, color: ColorTags::default(), cu_qp_delta: true, sao: false };
+        let c = |w, h, r| SeqConfig {
+            width: w,
+            height: h,
+            pic_rate: r,
+            color: ColorTags::default(),
+            cu_qp_delta: true,
+            sao: false,
+        };
         assert_eq!(c(3456, 544, 240).level_idc(), 153);
         assert_eq!(c(1920, 272, 240).level_idc(), 123);
         assert_eq!(c(1366, 192, 240).coded_width(), 1376);

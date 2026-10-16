@@ -140,7 +140,8 @@ pub fn config_dir() -> Result<PathBuf> {
     match std::env::var_os("XDG_CONFIG_HOME") {
         Some(dir) if !dir.is_empty() => Ok(PathBuf::from(dir).join("wayshare")),
         _ => Ok(
-            PathBuf::from(std::env::var_os("HOME").context("HOME not set")?).join(".config/wayshare"),
+            PathBuf::from(std::env::var_os("HOME").context("HOME not set")?)
+                .join(".config/wayshare"),
         ),
     }
 }

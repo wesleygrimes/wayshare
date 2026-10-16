@@ -18,12 +18,22 @@ unsafe impl Sync for Mapping {}
 impl Mapping {
     pub(super) fn new(fd: &OwnedFd, len: usize) -> Result<Self> {
         let ptr = unsafe {
-            libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, fd.as_raw_fd(), 0)
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                fd.as_raw_fd(),
+                0,
+            )
         };
         if ptr == libc::MAP_FAILED {
             return Err(std::io::Error::last_os_error()).context("mmap dmabuf");
         }
-        Ok(Self { ptr: ptr.cast(), len })
+        Ok(Self {
+            ptr: ptr.cast(),
+            len,
+        })
     }
 }
 
@@ -41,7 +51,12 @@ pub struct ReadGuard<'a> {
 }
 
 impl<'a> ReadGuard<'a> {
-    pub(super) fn new(map: &'a Mapping, fd: &'a OwnedFd, offset: usize, stride: usize) -> Result<Self> {
+    pub(super) fn new(
+        map: &'a Mapping,
+        fd: &'a OwnedFd,
+        offset: usize,
+        stride: usize,
+    ) -> Result<Self> {
         sync(fd, DMA_BUF_SYNC_READ)?;
         let bytes = unsafe { std::slice::from_raw_parts(map.ptr.add(offset), map.len - offset) };
         Ok(Self { bytes, fd, stride })

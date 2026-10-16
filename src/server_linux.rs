@@ -90,7 +90,10 @@ pub fn cursor_factory(output: Option<String>) -> CursorSourceFactory {
                 h.outputs()
             })
             .ok()
-            .and_then(|outs| outs.into_iter().find(|o| output.as_ref().is_none_or(|n| &o.name == n)))
+            .and_then(|outs| {
+                outs.into_iter()
+                    .find(|o| output.as_ref().is_none_or(|n| &o.name == n))
+            })
             .map_or(1.0, |o| o.scale);
         let image = match crate::cursor::default_pointer(scale) {
             Ok(img) => Some(img),
@@ -99,7 +102,10 @@ pub fn cursor_factory(output: Option<String>) -> CursorSourceFactory {
                 None
             }
         };
-        Box::new(ThemeCursor { image, _hidden: HiddenCursor::acquire() }) as Box<dyn CursorSource>
+        Box::new(ThemeCursor {
+            image,
+            _hidden: HiddenCursor::acquire(),
+        }) as Box<dyn CursorSource>
     })
 }
 
@@ -128,7 +134,9 @@ impl HiddenCursor {
         let mut st = HIDDEN.lock().unwrap();
         if st.0 == 0 {
             let r = crate::display::hyprland::Hyprland::from_env().and_then(|h| {
-                let was = h.request("j/getoption cursor:invisible")?.contains("\"bool\": true");
+                let was = h
+                    .request("j/getoption cursor:invisible")?
+                    .contains("\"bool\": true");
                 h.request("eval hl.config({ cursor = { invisible = true } })")?;
                 Ok(was)
             });
@@ -148,7 +156,9 @@ impl Drop for HiddenCursor {
         st.0 -= 1;
         if st.0 == 0 {
             let cmd = format!("eval hl.config({{ cursor = {{ invisible = {} }} }})", st.1);
-            if let Err(e) = crate::display::hyprland::Hyprland::from_env().and_then(|h| h.request(&cmd)) {
+            if let Err(e) =
+                crate::display::hyprland::Hyprland::from_env().and_then(|h| h.request(&cmd))
+            {
                 warn!("restoring the compositor cursor: {e:#}");
             }
         }
@@ -453,7 +463,8 @@ struct SendStats {
 
 fn pct(v: &mut [f64], q: f64) -> Option<f64> {
     v.sort_by(f64::total_cmp);
-    v.get(((v.len() as f64 - 1.0) * q) as usize).map(|x| (x * 10.0).round() / 10.0)
+    v.get(((v.len() as f64 - 1.0) * q) as usize)
+        .map(|x| (x * 10.0).round() / 10.0)
 }
 
 struct Sender {
@@ -530,7 +541,11 @@ impl Sender {
                 errors += 1;
                 if errors == 1 && self.send_errors_logged < 10 {
                     self.send_errors_logged += 1;
-                    warn!(len = pkt.len(), frame_bytes = out.tiles.iter().map(|t| t.data.len()).sum::<usize>(), "HP video send failed: {e}");
+                    warn!(
+                        len = pkt.len(),
+                        frame_bytes = out.tiles.iter().map(|t| t.data.len()).sum::<usize>(),
+                        "HP video send failed: {e}"
+                    );
                 }
             }
         }
@@ -614,7 +629,12 @@ fn run_media(p: MediaParams, stop: &AtomicBool) -> Result<()> {
     enc.set_output(frame_tx.clone());
     let sender = Sender {
         sock: sock.try_clone()?,
-        pk: Packetizer::new(PacketizerConfig::new(p.ssrc, p.payload_type, p.tiles, (w as u16, h as u16))),
+        pk: Packetizer::new(PacketizerConfig::new(
+            p.ssrc,
+            p.payload_type,
+            p.tiles,
+            (w as u16, h as u16),
+        )),
         tx: SrtpContext::new(&p.send_key),
         ssrc: p.ssrc,
         remote_ssrc: p.remote_ssrc,
@@ -638,7 +658,18 @@ fn run_media(p: MediaParams, stop: &AtomicBool) -> Result<()> {
         e.set_output(frame_tx.clone());
         Ok(e)
     };
-    let r = media_loop(stop, &sock, &mut cap, &mut enc, &mut reopen, &mut rc, &mut rx, first, start, &send_stats);
+    let r = media_loop(
+        stop,
+        &sock,
+        &mut cap,
+        &mut enc,
+        &mut reopen,
+        &mut rc,
+        &mut rx,
+        first,
+        start,
+        &send_stats,
+    );
     // Dropping the encoder and the last sender closes the frame channel and ends the send thread.
     drop(frame_tx);
     drop(enc);
@@ -693,7 +724,9 @@ fn media_loop(
                 last_forced_idr = Some(Instant::now());
             }
             enc.submit(&frame)?;
-            stats.submit_ms.push(frame.ready_at.elapsed().as_secs_f64() * 1e3);
+            stats
+                .submit_ms
+                .push(frame.ready_at.elapsed().as_secs_f64() * 1e3);
             stats.frames += 1;
             last = Some(frame);
         }
@@ -751,7 +784,9 @@ fn media_loop(
         if let Some(f) = cap.next_frame(Some(Duration::from_millis(wait)))? {
             if let Some(p) = f.presented {
                 let ready = monotonic_now().saturating_sub(f.ready_at.elapsed());
-                stats.present_to_ready_ms.push(ready.saturating_sub(p).as_secs_f64() * 1e3);
+                stats
+                    .present_to_ready_ms
+                    .push(ready.saturating_sub(p).as_secs_f64() * 1e3);
             }
             if held.replace(f).is_some() {
                 stats.dropped += 1;

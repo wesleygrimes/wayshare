@@ -34,7 +34,11 @@ pub struct TileLayout {
 impl TileLayout {
     pub fn new(width: u32, height: u32) -> Self {
         let tile_height = height.div_ceil(TILE_COUNT as u32).next_multiple_of(16);
-        Self { width, height, tile_height }
+        Self {
+            width,
+            height,
+            tile_height,
+        }
     }
 
     pub fn tile_y(&self, tile: usize) -> u32 {
@@ -43,7 +47,9 @@ impl TileLayout {
 
     /// Rows of real frame content in `tile` (less than `tile_height` for a padded last strip).
     pub fn tile_rows(&self, tile: usize) -> u32 {
-        self.height.saturating_sub(self.tile_y(tile)).min(self.tile_height)
+        self.height
+            .saturating_sub(self.tile_y(tile))
+            .min(self.tile_height)
     }
 
     /// Bitmask of tiles intersecting any of `rects`.
@@ -83,7 +89,11 @@ pub enum Transfer {
 
 impl Default for ColorTags {
     fn default() -> Self {
-        Self { primaries: Primaries::Bt709, transfer: Transfer::Srgb, full_range: true }
+        Self {
+            primaries: Primaries::Bt709,
+            transfer: Transfer::Srgb,
+            full_range: true,
+        }
     }
 }
 
@@ -111,7 +121,10 @@ pub struct X265Options {
 
 impl Default for X265Options {
     fn default() -> Self {
-        Self { preset: "ultrafast".into(), threads_per_tile: None }
+        Self {
+            preset: "ultrafast".into(),
+            threads_per_tile: None,
+        }
     }
 }
 
@@ -200,7 +213,10 @@ pub trait VideoEncoder {
     /// May block while the maximum number of frames is in flight.
     fn submit(&mut self, frame: &Self::Frame) -> anyhow::Result<()>;
     /// The next finished frame, in submission order. `timeout` `None` blocks; `Some(ZERO)` polls.
-    fn receive(&mut self, timeout: Option<std::time::Duration>) -> anyhow::Result<Option<EncodedFrame>>;
+    fn receive(
+        &mut self,
+        timeout: Option<std::time::Duration>,
+    ) -> anyhow::Result<Option<EncodedFrame>>;
     /// Frames submitted and not yet received.
     fn pending(&self) -> usize;
     /// Whether `submit` would start right away instead of waiting for the encoder. Callers that
@@ -307,7 +323,12 @@ mod tests {
     #[test]
     fn damage_mask() {
         let l = TileLayout::new(3456, 2160);
-        let r = |y, h| Rect { x: 0, y, width: 10, height: h };
+        let r = |y, h| Rect {
+            x: 0,
+            y,
+            width: 10,
+            height: h,
+        };
         assert_eq!(l.tiles_touched(&[]), 0);
         assert_eq!(l.tiles_touched(&[r(0, 1)]), 0b0001);
         assert_eq!(l.tiles_touched(&[r(543, 2)]), 0b0011);

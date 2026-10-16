@@ -28,12 +28,23 @@ pub enum ViewerPasteboard {
 }
 
 /// Decodes client msg 31 (as parsed by `rfb::messages`: flags byte is msg[2]).
-pub fn decode_viewer_send(flags: u8, uncompressed_len: u32, data: &[u8]) -> Result<ViewerPasteboard> {
+pub fn decode_viewer_send(
+    flags: u8,
+    uncompressed_len: u32,
+    data: &[u8],
+) -> Result<ViewerPasteboard> {
     let len = uncompressed_len as usize;
-    ensure!(len <= MAX_UNCOMPRESSED, "pasteboard of {len} bytes too large");
+    ensure!(
+        len <= MAX_UNCOMPRESSED,
+        "pasteboard of {len} bytes too large"
+    );
     let items = unpack(&decompress(data, len)?)?;
     Ok(if flags & 1 != 0 {
-        let mut types: Vec<_> = items.iter().flatten().filter_map(|f| mime_for_uti(&f.uti)).collect();
+        let mut types: Vec<_> = items
+            .iter()
+            .flatten()
+            .filter_map(|f| mime_for_uti(&f.uti))
+            .collect();
         types.dedup();
         ViewerPasteboard::Promises(types)
     } else {
@@ -77,7 +88,10 @@ mod tests {
         assert_eq!(m.len(), 16 + zlen);
         let back = decode_viewer_send(0, ulen as u32, &m[16..]).unwrap();
         assert_eq!(back, ViewerPasteboard::Data(ClipContent::text("hi")));
-        assert_eq!(misc_state_change(STATE_PASTEBOARD_UPDATED), [20, 0, 0, 4, 0, 1, 0, 2]);
+        assert_eq!(
+            misc_state_change(STATE_PASTEBOARD_UPDATED),
+            [20, 0, 0, 4, 0, 1, 0, 2]
+        );
     }
 
     /// Cross-check with Apple's code: run `tools-harness/clipcheck pack /tmp/wayshare-clip` first,
@@ -90,12 +104,21 @@ mod tests {
         let items = unpack(&raw).unwrap();
         assert_eq!(pack(&items), raw);
         let z = std::fs::read(dir.join("apple-compressed.bin")).unwrap();
-        let ulen: u32 = std::fs::read_to_string(dir.join("apple-compressed.len")).unwrap().trim().parse().unwrap();
-        let ViewerPasteboard::Data(c) = decode_viewer_send(0, ulen, &z).unwrap() else { panic!() };
+        let ulen: u32 = std::fs::read_to_string(dir.join("apple-compressed.len"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let ViewerPasteboard::Data(c) = decode_viewer_send(0, ulen, &z).unwrap() else {
+            panic!()
+        };
         assert_eq!(c.as_text().as_deref(), Some("hello wayshare"));
         assert_eq!(c.get(HTML), Some(&b"<b>hello</b>"[..]));
         let content = ClipContent(vec![
-            (super::super::mime::RTF.into(), b"{\\rtf1 rtf wayshare}".to_vec()),
+            (
+                super::super::mime::RTF.into(),
+                b"{\\rtf1 rtf wayshare}".to_vec(),
+            ),
             (HTML.into(), b"<i>html wayshare</i>".to_vec()),
             (TEXT.into(), "text wayshare \u{2603}".as_bytes().to_vec()),
         ]);
@@ -105,9 +128,18 @@ mod tests {
     #[test]
     fn viewer_promises() {
         let item = vec![
-            Flavor { uti: "public.html".into(), ..Default::default() },
-            Flavor { uti: "public.utf8-plain-text".into(), ..Default::default() },
-            Flavor { uti: "com.apple.flat-rtfd".into(), ..Default::default() },
+            Flavor {
+                uti: "public.html".into(),
+                ..Default::default()
+            },
+            Flavor {
+                uti: "public.utf8-plain-text".into(),
+                ..Default::default()
+            },
+            Flavor {
+                uti: "com.apple.flat-rtfd".into(),
+                ..Default::default()
+            },
         ];
         let packed = pack(&[item]);
         let z = compress(&packed);

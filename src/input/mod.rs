@@ -65,7 +65,11 @@ pub enum Gesture {
 pub enum Event2 {
     Scroll(ScrollEvent),
     /// Subtype 12: `block` is still AES-ECB encrypted.
-    KeyMouse { flags: u8, block: [u8; 16], timestamp: Option<u64> },
+    KeyMouse {
+        flags: u8,
+        block: [u8; 16],
+        timestamp: Option<u64>,
+    },
     /// No Wayland equivalent the virtual pointer can express; dropped.
     Gesture(Gesture),
     Other(u16),
@@ -74,7 +78,11 @@ pub enum Event2 {
 impl Event2 {
     pub fn parse(hdr_flags: u8, body: &[u8]) -> Result<Self> {
         let ts = if hdr_flags & 1 != 0 { 8 } else { 0 };
-        ensure!(body.len() >= 4, "EventMessage2 body too short ({})", body.len());
+        ensure!(
+            body.len() >= 4,
+            "EventMessage2 body too short ({})",
+            body.len()
+        );
         let kind = u16::from_be_bytes([body[2], body[3]]);
         let extra = match kind {
             1 | 2 => 8,
@@ -87,7 +95,12 @@ impl Event2 {
             12 => 18,
             _ => 0,
         };
-        ensure!(body.len() >= 4 + extra + ts, "EventMessage2 subtype {kind}: body {} < {}", body.len(), 4 + extra + ts);
+        ensure!(
+            body.len() >= 4 + extra + ts,
+            "EventMessage2 subtype {kind}: body {} < {}",
+            body.len(),
+            4 + extra + ts
+        );
         let i16_at = |o: usize| i16::from_be_bytes([body[o], body[o + 1]]);
         let i32_at = |o: usize| i32::from_be_bytes(body[o..o + 4].try_into().unwrap());
         let u16_at = |o: usize| u16::from_be_bytes([body[o], body[o + 1]]);
@@ -133,7 +146,10 @@ pub fn apply_block<S: InputSink + ?Sized>(
     b: &[u8; 16],
     keycode_needs_bit1: bool,
 ) -> Result<()> {
-    ensure!(matches!(b[0], 0 | 0xff) && matches!(b[10], 0 | 0xff), "decryption error: {b:02x?}");
+    ensure!(
+        matches!(b[0], 0 | 0xff) && matches!(b[10], 0 | 0xff),
+        "decryption error: {b:02x?}"
+    );
     let has_key = b[0] == 0xff;
     let has_mouse = b[10] == 0xff;
     if has_key {
@@ -154,7 +170,11 @@ pub fn apply_block<S: InputSink + ?Sized>(
 pub fn parse_input_source(payload: &[u8]) -> Option<String> {
     let len = u16::from_be_bytes(payload.get(2..4)?.try_into().ok()?) as usize;
     let id = payload.get(4..4 + len)?;
-    Some(String::from_utf8_lossy(id).trim_end_matches('\0').to_string())
+    Some(
+        String::from_utf8_lossy(id)
+            .trim_end_matches('\0')
+            .to_string(),
+    )
 }
 
 /// Drops everything; for platforms without a backend.
@@ -162,7 +182,12 @@ pub struct LoggingSink;
 
 impl InputSink for LoggingSink {
     fn key(&mut self, down: bool, keysym: u32, mac_keycode: Option<u16>) -> Result<()> {
-        debug!(down, keysym = format_args!("{keysym:#x}"), ?mac_keycode, "key");
+        debug!(
+            down,
+            keysym = format_args!("{keysym:#x}"),
+            ?mac_keycode,
+            "key"
+        );
         Ok(())
     }
     fn pointer(&mut self, x: i32, y: i32, buttons: u8) -> Result<()> {
@@ -218,12 +243,21 @@ mod tests {
         apply_block(&mut r, 1, &b, false).unwrap();
         apply_block(&mut r, 1, &b, true).unwrap();
         apply_block(&mut r, 3, &b, true).unwrap();
-        assert_eq!(r.0, ["key true 0x61 Some(0)", "key true 0x61 None", "key true 0x61 Some(0)"]);
+        assert_eq!(
+            r.0,
+            [
+                "key true 0x61 Some(0)",
+                "key true 0x61 None",
+                "key true 0x61 Some(0)"
+            ]
+        );
     }
 
     #[test]
     fn block_mouse_signed_coords() {
-        let b = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 1, 0xff, 0xff, 0x01, 0x00];
+        let b = [
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 1, 0xff, 0xff, 0x01, 0x00,
+        ];
         let mut r = Rec::default();
         apply_block(&mut r, 0, &b, false).unwrap();
         assert_eq!(r.0, ["ptr -1 256 1"]);
@@ -240,8 +274,13 @@ mod tests {
         body[34..38].copy_from_slice(&2u32.to_be_bytes());
         body[46..50].copy_from_slice(&2u32.to_be_bytes());
         body[50..52].copy_from_slice(&100u16.to_be_bytes());
-        let Event2::Scroll(s) = Event2::parse(0, &body).unwrap() else { panic!() };
-        assert_eq!((s.lines_y, s.point_y, s.scroll_phase, s.flags, s.x), (-1, -10, 2, 2, 100));
+        let Event2::Scroll(s) = Event2::parse(0, &body).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            (s.lines_y, s.point_y, s.scroll_phase, s.flags, s.x),
+            (-1, -10, 2, 2, 100)
+        );
         assert!(Event2::parse(1, &body).is_err());
     }
 
@@ -254,11 +293,22 @@ mod tests {
         body[29] = 9;
         assert_eq!(
             Event2::parse(1, &body).unwrap(),
-            Event2::KeyMouse { flags: 3, block: { let mut b = [0; 16]; b[0] = 0xaa; b }, timestamp: Some(9) }
+            Event2::KeyMouse {
+                flags: 3,
+                block: {
+                    let mut b = [0; 16];
+                    b[0] = 0xaa;
+                    b
+                },
+                timestamp: Some(9)
+            }
         );
         let mut g = vec![0u8; 16];
         g[3] = 3;
-        assert_eq!(Event2::parse(0, &g).unwrap(), Event2::Gesture(Gesture::Magnify));
+        assert_eq!(
+            Event2::parse(0, &g).unwrap(),
+            Event2::Gesture(Gesture::Magnify)
+        );
         g[3] = 10;
         assert_eq!(Event2::parse(0, &g).unwrap(), Event2::Other(10));
     }
@@ -269,7 +319,10 @@ mod tests {
         let mut p = vec![0, 1, 0, id.len() as u8];
         p.extend_from_slice(id);
         p.push(0);
-        assert_eq!(parse_input_source(&p).as_deref(), Some("com.apple.keylayout.US"));
+        assert_eq!(
+            parse_input_source(&p).as_deref(),
+            Some("com.apple.keylayout.US")
+        );
         assert_eq!(parse_input_source(&[0, 1, 0, 9, b'x']), None);
     }
 }

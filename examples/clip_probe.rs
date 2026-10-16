@@ -13,7 +13,8 @@ fn main() -> anyhow::Result<()> {
     use wayshare::clipboard::{ClipContent, ClipboardBackend, mime};
 
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let secs = || -> anyhow::Result<u64> { Ok(args.get(1).map(|s| s.parse()).transpose()?.unwrap_or(5)) };
+    let secs =
+        || -> anyhow::Result<u64> { Ok(args.get(1).map(|s| s.parse()).transpose()?.unwrap_or(5)) };
     match args.first().map(String::as_str) {
         Some("globals") => println!("{:?}", data_control_globals()?),
         Some("watch") => {
@@ -34,7 +35,10 @@ fn main() -> anyhow::Result<()> {
             std::thread::sleep(Duration::from_millis(300));
             cb.set(ClipContent(vec![
                 (mime::HTML.into(), b"<b>wayshare synthetic</b>".to_vec()),
-                (mime::TEXT.into(), b"wayshare synthetic \xe2\x98\x83".to_vec()),
+                (
+                    mime::TEXT.into(),
+                    b"wayshare synthetic \xe2\x98\x83".to_vec(),
+                ),
             ]))?;
             std::thread::sleep(Duration::from_millis(300));
             println!("own selection, offered {:?}", cb.offered());

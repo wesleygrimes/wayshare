@@ -38,20 +38,28 @@ pub struct AudioSender {
 
 impl AudioSender {
     pub fn start(p: AudioParams) -> Result<Self> {
-        let sock = UdpSocket::bind(SocketAddr::new(std::net::Ipv4Addr::UNSPECIFIED.into(), p.local_port))
-            .with_context(|| format!("binding audio UDP {}", p.local_port))?;
+        let sock = UdpSocket::bind(SocketAddr::new(
+            std::net::Ipv4Addr::UNSPECIFIED.into(),
+            p.local_port,
+        ))
+        .with_context(|| format!("binding audio UDP {}", p.local_port))?;
         sock.connect(p.peer)?;
         sock.set_nonblocking(true)?;
         let cap = MonitorCapture::open(p.device.as_deref())?;
         let enc = AacEldEncoder::new(&p.encoder)?;
         let stop = Arc::new(AtomicBool::new(false));
         let s = stop.clone();
-        let thread = std::thread::Builder::new().name("hp-audio".into()).spawn(move || {
-            if let Err(e) = run(p, sock, cap, enc, &s) {
-                warn!("HP audio stopped: {e:#}");
-            }
-        })?;
-        Ok(Self { stop, thread: Some(thread) })
+        let thread = std::thread::Builder::new()
+            .name("hp-audio".into())
+            .spawn(move || {
+                if let Err(e) = run(p, sock, cap, enc, &s) {
+                    warn!("HP audio stopped: {e:#}");
+                }
+            })?;
+        Ok(Self {
+            stop,
+            thread: Some(thread),
+        })
     }
 
     pub fn running(&self) -> bool {
@@ -72,7 +80,13 @@ impl Drop for AudioSender {
     }
 }
 
-fn run(p: AudioParams, sock: UdpSocket, mut cap: MonitorCapture, mut enc: AacEldEncoder, stop: &AtomicBool) -> Result<()> {
+fn run(
+    p: AudioParams,
+    sock: UdpSocket,
+    mut cap: MonitorCapture,
+    mut enc: AacEldEncoder,
+    stop: &AtomicBool,
+) -> Result<()> {
     let mut tx = SrtpContext::new(&p.send_key);
     let mut rx = SrtpContext::new(&p.recv_key);
     let mut pk = AudioPacketizer::new(p.ssrc, p.payload_type, rand::random(), rand::random());
@@ -82,7 +96,9 @@ fn run(p: AudioParams, sock: UdpSocket, mut cap: MonitorCapture, mut enc: AacEld
     info!(peer = %p.peer, ssrc = format_args!("{:#x}", p.ssrc), "HP audio started");
     while !stop.load(Ordering::Relaxed) {
         cap.read_frame(&mut pcm)?;
-        let Some(au) = enc.encode(&pcm)? else { continue };
+        let Some(au) = enc.encode(&pcm)? else {
+            continue;
+        };
         let Some(mut pkt) = pk.packet(&au) else {
             warn!(len = au.len(), "dropping oversized AU");
             continue;
@@ -97,7 +113,14 @@ fn run(p: AudioParams, sock: UdpSocket, mut cap: MonitorCapture, mut enc: AacEld
         }
         let now = Instant::now();
         if now >= next_sr {
-            let mut sr = rtcp::sender_report(p.ssrc, p.remote_ssrc, rtcp::ntp_now(), pk.timestamp(), packets, octets);
+            let mut sr = rtcp::sender_report(
+                p.ssrc,
+                p.remote_ssrc,
+                rtcp::ntp_now(),
+                pk.timestamp(),
+                packets,
+                octets,
+            );
             tx.protect_rtcp(&mut sr)?;
             let _ = sock.send(&sr);
             next_sr = now + Duration::from_secs(1);

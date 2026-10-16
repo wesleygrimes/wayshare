@@ -16,7 +16,8 @@ use super::convert::{Coeffs, Planes, bgrx_to_yuv};
 use super::plan::{PicKind, TilePic};
 use super::tiles::{Backend, Tiles};
 use super::{
-    Chroma, EncodedFrame, EncodedTile, EncoderConfig, Primaries, TILE_COUNT, TileLayout, Transfer, VideoEncoder, nal,
+    Chroma, EncodedFrame, EncodedTile, EncoderConfig, Primaries, TILE_COUNT, TileLayout, Transfer,
+    VideoEncoder, nal,
 };
 use crate::capture::Frame;
 
@@ -32,7 +33,9 @@ impl X265Encoder {
         let layout = TileLayout::new(width, height);
         let session = Session::new(layout, cfg)?;
         // A bitrate change restarts the sequence (IDR), so keep them rare.
-        Ok(Self { tiles: Tiles::new(session, layout, cfg, false, Duration::from_secs(1))? })
+        Ok(Self {
+            tiles: Tiles::new(session, layout, cfg, false, Duration::from_secs(1))?,
+        })
     }
 }
 
@@ -103,9 +106,19 @@ impl Session {
             Chroma::Yuv444 => (w, th),
             Chroma::Yuv420 => (w.div_ceil(2), th.div_ceil(2)),
         };
-        let strides = [w.next_multiple_of(64), cw.next_multiple_of(64), cw.next_multiple_of(64)];
+        let strides = [
+            w.next_multiple_of(64),
+            cw.next_multiple_of(64),
+            cw.next_multiple_of(64),
+        ];
         let bufs = (0..TILE_COUNT)
-            .map(|_| TilePlanes { planes: [vec![0; strides[0] * th], vec![128; strides[1] * ch], vec![128; strides[2] * ch]] })
+            .map(|_| TilePlanes {
+                planes: [
+                    vec![0; strides[0] * th],
+                    vec![128; strides[1] * ch],
+                    vec![128; strides[2] * ch],
+                ],
+            })
             .collect();
         let mut s = Self {
             layout,
@@ -149,7 +162,10 @@ impl Session {
             bail!("x265_param_alloc failed");
         }
         let preset = CString::new(cfg.x265.preset.as_str())?;
-        if unsafe { (api.param_default_preset)(self.param, preset.as_ptr(), c"zerolatency".as_ptr()) } < 0 {
+        if unsafe {
+            (api.param_default_preset)(self.param, preset.as_ptr(), c"zerolatency".as_ptr())
+        } < 0
+        {
             bail!("x265: unknown preset {}", cfg.x265.preset);
         }
         let threads = cfg.x265.threads_per_tile.map_or_else(
@@ -158,9 +174,20 @@ impl Session {
         );
         let color = cfg.color;
         let mut params: Vec<(&str, String)> = vec![
-            ("input-res", format!("{}x{}", self.layout.width, self.layout.tile_height)),
+            (
+                "input-res",
+                format!("{}x{}", self.layout.width, self.layout.tile_height),
+            ),
             ("fps", (cfg.fps * TILE_COUNT as u32).to_string()),
-            ("input-csp", if cfg.chroma == Chroma::Yuv444 { "i444" } else { "i420" }.into()),
+            (
+                "input-csp",
+                if cfg.chroma == Chroma::Yuv444 {
+                    "i444"
+                } else {
+                    "i420"
+                }
+                .into(),
+            ),
             ("pools", threads.to_string()),
             ("frame-threads", "1".into()),
             ("wpp", "1".into()),
@@ -180,18 +207,27 @@ impl Session {
             ("info", "0".into()),
             ("hash", "0".into()),
             ("log-level", "warning".into()),
-            ("range", if color.full_range { "full" } else { "limited" }.into()),
+            (
+                "range",
+                if color.full_range { "full" } else { "limited" }.into(),
+            ),
             ("colormatrix", "bt709".into()),
-            ("colorprim", match color.primaries {
-                Primaries::Bt709 => "bt709",
-                Primaries::DisplayP3 => "smpte432",
-            }
-            .into()),
-            ("transfer", match color.transfer {
-                Transfer::Bt709 => "bt709",
-                Transfer::Srgb => "iec61966-2-1",
-            }
-            .into()),
+            (
+                "colorprim",
+                match color.primaries {
+                    Primaries::Bt709 => "bt709",
+                    Primaries::DisplayP3 => "smpte432",
+                }
+                .into(),
+            ),
+            (
+                "transfer",
+                match color.transfer {
+                    Transfer::Bt709 => "bt709",
+                    Transfer::Srgb => "iec61966-2-1",
+                }
+                .into(),
+            ),
         ];
         match cfg.bitrate_bps {
             Some(total) => {
@@ -209,7 +245,11 @@ impl Session {
                 bail!("x265: bad parameter {k}={v} ({r})");
             }
         }
-        let profile = if cfg.chroma == Chroma::Yuv444 { c"main444-8" } else { c"main" };
+        let profile = if cfg.chroma == Chroma::Yuv444 {
+            c"main444-8"
+        } else {
+            c"main"
+        };
         if unsafe { (api.param_apply_profile)(self.param, profile.as_ptr()) } < 0 {
             bail!("x265: profile {profile:?} rejected");
         }
@@ -235,7 +275,11 @@ impl Session {
                     continue;
                 }
                 s.spawn(move || {
-                    let (w, rows, th) = (l.width as usize, l.tile_rows(t) as usize, l.tile_height as usize);
+                    let (w, rows, th) = (
+                        l.width as usize,
+                        l.tile_rows(t) as usize,
+                        l.tile_height as usize,
+                    );
                     let [y, u, v] = &mut buf.planes;
                     bgrx_to_yuv(
                         &src[l.tile_y(t) as usize * stride..],
@@ -244,7 +288,13 @@ impl Session {
                         rows,
                         chroma,
                         &k,
-                        Planes { y, u, v, y_stride: strides[0], c_stride: strides[1] },
+                        Planes {
+                            y,
+                            u,
+                            v,
+                            y_stride: strides[0],
+                            c_stride: strides[1],
+                        },
                     );
                     if rows < th {
                         let (crows, cth) = match chroma {
@@ -273,7 +323,9 @@ impl Session {
             let planes = pic.add(PIC_PLANES) as *mut *mut u8;
             let strides = pic.add(PIC_STRIDE) as *mut c_int;
             for i in 0..3 {
-                planes.add(i).write(self.bufs[p.tile].planes[i].as_mut_ptr());
+                planes
+                    .add(i)
+                    .write(self.bufs[p.tile].planes[i].as_mut_ptr());
                 strides.add(i).write(self.strides[i] as c_int);
             }
             let ty = match p.kind {
@@ -296,7 +348,11 @@ impl Session {
             for nal in std::slice::from_raw_parts(nals, n as usize) {
                 data.extend_from_slice(std::slice::from_raw_parts(nal.payload, nal.size as usize));
             }
-            Ok(EncodedTile { index: p.tile as u8, keyframe: p.kind != PicKind::Inter, data: nal::strip_sei(&data) })
+            Ok(EncodedTile {
+                index: p.tile as u8,
+                keyframe: p.kind != PicKind::Inter,
+                data: nal::strip_sei(&data),
+            })
         }
     }
 }
@@ -311,7 +367,10 @@ impl Backend for Session {
         self.convert(frame, pics)?;
         let t1 = std::time::Instant::now();
         meta.timings.convert = t1 - t0;
-        meta.tiles = pics.iter().map(|&p| self.encode_pic(p)).collect::<Result<Vec<_>>>()?;
+        meta.tiles = pics
+            .iter()
+            .map(|&p| self.encode_pic(p))
+            .collect::<Result<Vec<_>>>()?;
         meta.timings.encode = t1.elapsed();
         self.done.push_back(meta);
         Ok(())
@@ -397,7 +456,8 @@ const _: () = assert!(std::mem::offset_of!(Api, encoder_close) == 200);
 // The table is immutable static data inside libx265.
 unsafe impl Sync for Api {}
 
-type ApiQuery = unsafe extern "C" fn(bit_depth: c_int, api_version: c_int, err: *mut c_int) -> *const Api;
+type ApiQuery =
+    unsafe extern "C" fn(bit_depth: c_int, api_version: c_int, err: *mut c_int) -> *const Api;
 
 fn api() -> Result<&'static Api, String> {
     static API: OnceLock<Result<usize, String>> = OnceLock::new();
@@ -416,7 +476,9 @@ fn api() -> Result<&'static Api, String> {
         let mut err = 0;
         let a = unsafe { query(8, X265_BUILD, &mut err) };
         if a.is_null() {
-            return Err(format!("libx265 doesn't provide 8-bit API build {X265_BUILD} (error {err})"));
+            return Err(format!(
+                "libx265 doesn't provide 8-bit API build {X265_BUILD} (error {err})"
+            ));
         }
         let ap = unsafe { &*a };
         if ap.api_build_number != X265_BUILD || ap.sizeof_picture != SIZEOF_PICTURE {

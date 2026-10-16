@@ -25,12 +25,21 @@ pub struct RequestedMode {
 impl RequestedMode {
     /// Retina factor (2.0 on a HiDPI Mac).
     pub fn scale(&self) -> f64 {
-        if self.point_width == 0 { 1.0 } else { self.pixel_width as f64 / self.point_width as f64 }
+        if self.point_width == 0 {
+            1.0
+        } else {
+            self.pixel_width as f64 / self.point_width as f64
+        }
     }
 
     /// Output mode for the compositor: pixel size at the client's Retina scale.
     pub fn display_mode(&self) -> super::DisplayMode {
-        super::fit_mode(self.pixel_width, self.pixel_height, self.refresh_hz, self.scale())
+        super::fit_mode(
+            self.pixel_width,
+            self.pixel_height,
+            self.refresh_hz,
+            self.scale(),
+        )
     }
 }
 
@@ -68,32 +77,54 @@ pub struct DisplayRequest {
 
 /// Parses a whole msg 29, starting at the type byte.
 pub fn parse_display_configuration(msg: &[u8]) -> Result<DisplayRequest> {
-    ensure!(msg.len() >= HEADER && msg[0] == 29, "not a SetDisplayConfiguration message");
+    ensure!(
+        msg.len() >= HEADER && msg[0] == 29,
+        "not a SetDisplayConfiguration message"
+    );
     let u16_at = |o: usize| u16::from_be_bytes([msg[o], msg[o + 1]]);
     let u32_at = |o: usize| u32::from_be_bytes(msg[o..o + 4].try_into().unwrap());
     let size = u16_at(2) as usize;
-    ensure!(size > 0xbf, "msg 29 size {size} below the server's minimum 192");
-    ensure!(msg.len() >= size + 4, "msg 29 truncated: {} < {}", msg.len(), size + 4);
+    ensure!(
+        size > 0xbf,
+        "msg 29 size {size} below the server's minimum 192"
+    );
+    ensure!(
+        msg.len() >= size + 4,
+        "msg 29 truncated: {} < {}",
+        msg.len(),
+        size + 4
+    );
     let count = u16_at(6);
     ensure!(count > 0, "msg 29 display count is zero");
     let end = size + 4;
     let mut off = HEADER;
     let mut displays = Vec::new();
     for i in 0..count.min(2) {
-        ensure!(off + DESCRIPTOR <= end, "display {i} descriptor beyond end of message");
+        ensure!(
+            off + DESCRIPTOR <= end,
+            "display {i} descriptor beyond end of message"
+        );
         let d = &msg[off..];
         let du16 = |o: usize| u16::from_be_bytes([d[o], d[o + 1]]);
         let du32 = |o: usize| u32::from_be_bytes(d[o..o + 4].try_into().unwrap());
         let elem = du16(0) as usize;
         let n_modes = du16(0x9a) as usize;
-        ensure!(elem >= DESCRIPTOR + n_modes * MODE, "display {i}: element size {elem} < {} modes", n_modes);
+        ensure!(
+            elem >= DESCRIPTOR + n_modes * MODE,
+            "display {i}: element size {elem} < {} modes",
+            n_modes
+        );
         ensure!(off + elem <= end, "display {i} goes beyond end of message");
         let name = &d[2..2 + NAME_LEN];
-        let name = String::from_utf8_lossy(&name[..name.iter().position(|&b| b == 0).unwrap_or(NAME_LEN)]).into_owned();
+        let name =
+            String::from_utf8_lossy(&name[..name.iter().position(|&b| b == 0).unwrap_or(NAME_LEN)])
+                .into_owned();
         let native_mode = du16(0x92);
         let preferred_mode = du16(0x94);
         if n_modes > 0 && (native_mode as usize >= n_modes || preferred_mode as usize >= n_modes) {
-            bail!("display {i}: mode index out of range ({native_mode}/{preferred_mode} of {n_modes})");
+            bail!(
+                "display {i}: mode index out of range ({native_mode}/{preferred_mode} of {n_modes})"
+            );
         }
         let modes = (0..n_modes)
             .map(|m| {
@@ -123,7 +154,11 @@ pub fn parse_display_configuration(msg: &[u8]) -> Result<DisplayRequest> {
         });
         off += elem;
     }
-    Ok(DisplayRequest { version: u16_at(4), flags: u32_at(8), displays })
+    Ok(DisplayRequest {
+        version: u16_at(4),
+        flags: u32_at(8),
+        displays,
+    })
 }
 
 /// RFB PixelFormat as the agent fills it for 32-bit displays.
@@ -143,7 +178,12 @@ pub struct DisplayInfoEntry {
 }
 
 /// Payload after the 1101 rect header (rect w/h = framebuffer pixels).
-pub fn encode_display_info(point_width: u16, point_height: u16, flags: u32, entries: &[DisplayInfoEntry]) -> Vec<u8> {
+pub fn encode_display_info(
+    point_width: u16,
+    point_height: u16,
+    flags: u32,
+    entries: &[DisplayInfoEntry],
+) -> Vec<u8> {
     let mut v = Vec::with_capacity(10 + 28 * entries.len());
     v.extend_from_slice(&point_width.to_be_bytes());
     v.extend_from_slice(&point_height.to_be_bytes());
@@ -229,15 +269,40 @@ mod tests {
         assert!((d.width_mm - 3840.0 * 25.4 / 264.0).abs() < 0.01);
         assert!((d.height_mm - 2160.0 * 25.4 / 264.0).abs() < 0.01);
         assert_eq!((d.native_mode, d.preferred_mode), (0, 0));
-        let sizes: Vec<_> = d.modes.iter().map(|m| (m.pixel_width, m.pixel_height, m.point_width, m.point_height)).collect();
+        let sizes: Vec<_> = d
+            .modes
+            .iter()
+            .map(|m| (m.pixel_width, m.pixel_height, m.point_width, m.point_height))
+            .collect();
         assert_eq!(
             sizes,
-            [(3840, 2160, 1920, 1080), (2880, 1800, 1440, 900), (3840, 2160, 1920, 1080), (2880, 1620, 1440, 810), (2624, 1696, 1312, 848)]
+            [
+                (3840, 2160, 1920, 1080),
+                (2880, 1800, 1440, 900),
+                (3840, 2160, 1920, 1080),
+                (2880, 1620, 1440, 810),
+                (2624, 1696, 1312, 848)
+            ]
         );
-        assert!(d.modes.iter().all(|m| m.refresh_hz == 60.0 && m.flags == 0 && m.scale() == 2.0));
+        assert!(
+            d.modes
+                .iter()
+                .all(|m| m.refresh_hz == 60.0 && m.flags == 0 && m.scale() == 2.0)
+        );
         let p = d.preferred().unwrap();
-        assert_eq!((p.pixel_width, p.pixel_height, p.scale()), (3840, 2160, 2.0));
-        assert_eq!(p.display_mode(), crate::display::DisplayMode { width: 3840, height: 2160, refresh_hz: 60.0, scale: 2.0 });
+        assert_eq!(
+            (p.pixel_width, p.pixel_height, p.scale()),
+            (3840, 2160, 2.0)
+        );
+        assert_eq!(
+            p.display_mode(),
+            crate::display::DisplayMode {
+                width: 3840,
+                height: 2160,
+                refresh_hz: 60.0,
+                scale: 2.0
+            }
+        );
     }
 
     #[test]
@@ -257,7 +322,16 @@ mod tests {
 
     #[test]
     fn display_info_layout() {
-        let v = encode_display_info(1920, 1080, 0, &[DisplayInfoEntry { display_id: 1, pixel_width: 3840, pixel_height: 2160 }]);
+        let v = encode_display_info(
+            1920,
+            1080,
+            0,
+            &[DisplayInfoEntry {
+                display_id: 1,
+                pixel_width: 3840,
+                pixel_height: 2160,
+            }],
+        );
         assert_eq!(v.len(), 10 + 28);
         assert_eq!(&v[..10], &[0x07, 0x80, 0x04, 0x38, 0, 0, 0, 0, 0, 1]);
         assert_eq!(&v[10..18], &[0, 0, 0, 1, 0x0f, 0x00, 0x08, 0x70]);

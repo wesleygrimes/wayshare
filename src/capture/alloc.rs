@@ -49,7 +49,12 @@ impl Allocator {
             .write(true)
             .open(&node)
             .with_context(|| format!("open {}", node.display()))?;
-        Ok(Self { gbm: Device::new(file)?, node, memory: Memory::Gpu, udmabuf: None })
+        Ok(Self {
+            gbm: Device::new(file)?,
+            node,
+            memory: Memory::Gpu,
+            udmabuf: None,
+        })
     }
 
     pub fn render_node(&self) -> &PathBuf {
@@ -75,13 +80,16 @@ impl Allocator {
         fourcc: u32,
         modifiers: &[u64],
     ) -> Result<Allocation> {
-        if self.memory == Memory::System && (modifiers.is_empty() || modifiers.contains(&MOD_LINEAR)) {
+        if self.memory == Memory::System
+            && (modifiers.is_empty() || modifiers.contains(&MOD_LINEAR))
+        {
             return self.allocate_udmabuf(width, height);
         }
         let format = Format::try_from(fourcc).context("unknown fourcc")?;
         let flags = BufferObjectFlags::RENDERING;
         let bo = if modifiers.is_empty() {
-            self.gbm.create_buffer_object::<()>(width, height, format, flags)?
+            self.gbm
+                .create_buffer_object::<()>(width, height, format, flags)?
         } else {
             self.gbm.create_buffer_object_with_modifiers2::<()>(
                 width,
@@ -124,14 +132,21 @@ impl Allocator {
     fn allocate_udmabuf(&mut self, width: u32, height: u32) -> Result<Allocation> {
         if self.udmabuf.is_none() {
             self.udmabuf = Some(
-                OpenOptions::new().read(true).write(true).open("/dev/udmabuf").context("open /dev/udmabuf")?,
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open("/dev/udmabuf")
+                    .context("open /dev/udmabuf")?,
             );
         }
         let stride = (width * 4).next_multiple_of(256);
         let page = 4096u64;
         let size = (stride as u64 * height as u64).next_multiple_of(page);
         unsafe {
-            let memfd = libc::memfd_create(c"wayshare-capture".as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING);
+            let memfd = libc::memfd_create(
+                c"wayshare-capture".as_ptr(),
+                libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+            );
             if memfd < 0 {
                 return Err(std::io::Error::last_os_error()).context("memfd_create");
             }
@@ -147,14 +162,22 @@ impl Allocator {
                 offset: 0,
                 size,
             };
-            let fd = libc::ioctl(self.udmabuf.as_ref().unwrap().as_raw_fd(), UDMABUF_CREATE, &create);
+            let fd = libc::ioctl(
+                self.udmabuf.as_ref().unwrap().as_raw_fd(),
+                UDMABUF_CREATE,
+                &create,
+            );
             if fd < 0 {
                 return Err(std::io::Error::last_os_error()).context("UDMABUF_CREATE");
             }
             Ok(Allocation {
                 id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
                 modifier: MOD_LINEAR,
-                planes: vec![Plane { fd: OwnedFd::from_raw_fd(fd), offset: 0, stride }],
+                planes: vec![Plane {
+                    fd: OwnedFd::from_raw_fd(fd),
+                    offset: 0,
+                    stride,
+                }],
             })
         }
     }
@@ -166,7 +189,10 @@ fn render_node_for(dev: u64) -> Result<PathBuf> {
         if std::fs::metadata(&path)?.rdev() != dev {
             continue;
         }
-        if path.file_name().is_some_and(|n| n.to_string_lossy().starts_with("renderD")) {
+        if path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("renderD"))
+        {
             return Ok(path);
         }
         let (major, minor) = (libc::major(dev), libc::minor(dev));

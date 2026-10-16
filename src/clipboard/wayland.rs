@@ -11,7 +11,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use tracing::{debug, warn};
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{wl_registry, wl_seat::WlSeat};
-use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop, event_created_child};
+use wayland_client::{
+    Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop, event_created_child,
+};
 use wayland_protocols::ext::data_control::v1::client::{
     ext_data_control_device_v1::{self as device, ExtDataControlDeviceV1},
     ext_data_control_manager_v1::ExtDataControlManagerV1,
@@ -53,8 +55,9 @@ impl WaylandClipboard {
         let (globals, queue) = registry_queue_init::<State>(&conn)?;
         let qh = queue.handle();
         let seat: WlSeat = globals.bind(&qh, 1..=1, ()).context("wl_seat")?;
-        let mgr: ExtDataControlManagerV1 =
-            globals.bind(&qh, 1..=1, ()).context("ext_data_control_manager_v1 not offered")?;
+        let mgr: ExtDataControlManagerV1 = globals
+            .bind(&qh, 1..=1, ())
+            .context("ext_data_control_manager_v1 not offered")?;
         let dev = mgr.get_data_device(&seat, &qh, ());
         let shared = Arc::new(Shared {
             serial: AtomicU64::new(0),
@@ -79,11 +82,19 @@ impl WaylandClipboard {
                     warn!("clipboard thread stopped: {e:#}");
                 }
             })?;
-        Ok(Self { shared, cmds: Mutex::new(tx), wake: wake_w })
+        Ok(Self {
+            shared,
+            cmds: Mutex::new(tx),
+            wake: wake_w,
+        })
     }
 
     fn send(&self, cmd: Cmd) -> Result<()> {
-        self.cmds.lock().unwrap().send(cmd).map_err(|_| anyhow!("clipboard thread gone"))?;
+        self.cmds
+            .lock()
+            .unwrap()
+            .send(cmd)
+            .map_err(|_| anyhow!("clipboard thread gone"))?;
         let _ = std::fs::File::from(self.wake.try_clone()?).write(&[1]);
         Ok(())
     }
@@ -101,7 +112,8 @@ impl ClipboardBackend for WaylandClipboard {
     fn read(&self) -> Result<ClipContent> {
         let (tx, rx) = sync_channel(1);
         self.send(Cmd::Read(tx))?;
-        rx.recv_timeout(READ_TIMEOUT * 4).context("clipboard read timed out")?
+        rx.recv_timeout(READ_TIMEOUT * 4)
+            .context("clipboard read timed out")?
     }
 
     fn set(&self, content: ClipContent) -> Result<()> {
@@ -149,14 +161,23 @@ fn run(
         conn.flush()?;
         if let Some(guard) = conn.prepare_read() {
             let mut fds = [
-                libc::pollfd { fd: guard.connection_fd().as_raw_fd(), events: libc::POLLIN, revents: 0 },
-                libc::pollfd { fd: wake.as_raw_fd(), events: libc::POLLIN, revents: 0 },
+                libc::pollfd {
+                    fd: guard.connection_fd().as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: wake.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
             ];
             unsafe { libc::poll(fds.as_mut_ptr(), 2, 500) };
             if fds[0].revents != 0 {
                 match guard.read() {
                     Ok(_) => {}
-                    Err(wayland_client::backend::WaylandError::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(wayland_client::backend::WaylandError::Io(e))
+                        if e.kind() == std::io::ErrorKind::WouldBlock => {}
                     Err(e) => return Err(e.into()),
                 }
             }
@@ -169,7 +190,9 @@ fn run(
                     let r = st.read(&conn);
                     let _ = reply.send(r);
                 }
-                Cmd::Set(content, promised) => st.take_selection(&mgr, &dev, &qh, content, promised),
+                Cmd::Set(content, promised) => {
+                    st.take_selection(&mgr, &dev, &qh, content, promised)
+                }
             }
         }
         st.expire_pending();
@@ -182,11 +205,16 @@ impl State {
         if let Some(own) = &self.own {
             return Ok(own.content.clone());
         }
-        let Some(offer) = &self.selection else { return Ok(ClipContent::default()) };
+        let Some(offer) = &self.selection else {
+            return Ok(ClipContent::default());
+        };
         let names = offer.data::<OfferMimes>().unwrap().lock().unwrap().clone();
         let mut out = ClipContent::default();
         for canonical in [mime::RTF, mime::HTML, mime::PNG, mime::JPEG, mime::TEXT] {
-            let Some(name) = mime::offered_names(canonical).into_iter().find(|n| names.iter().any(|o| o == n)) else {
+            let Some(name) = mime::offered_names(canonical)
+                .into_iter()
+                .find(|n| names.iter().any(|o| o == n))
+            else {
                 continue;
             };
             let (r, w) = pipe()?;
@@ -211,7 +239,11 @@ impl State {
         promised: Vec<&'static str>,
     ) {
         let types: Vec<&'static str> = if promised.is_empty() {
-            content.0.iter().filter_map(|(m, _)| mime::canonical(m)).collect()
+            content
+                .0
+                .iter()
+                .filter_map(|(m, _)| mime::canonical(m))
+                .collect()
         } else {
             promised.clone()
         };
@@ -223,7 +255,11 @@ impl State {
         }
         src.offer(MARKER.to_string());
         dev.set_selection(Some(&src));
-        if let Some(old) = self.own.replace(Own { source: src, content, promised }) {
+        if let Some(old) = self.own.replace(Own {
+            source: src,
+            content,
+            promised,
+        }) {
             old.source.destroy();
         }
         self.fulfil_pending();
@@ -242,7 +278,8 @@ impl State {
     }
 
     fn expire_pending(&mut self) {
-        self.pending.retain(|(_, _, t)| t.elapsed() < PROMISE_TIMEOUT);
+        self.pending
+            .retain(|(_, _, t)| t.elapsed() < PROMISE_TIMEOUT);
     }
 }
 
@@ -274,7 +311,11 @@ fn read_fd(fd: OwnedFd, cap: usize) -> Result<Vec<u8>> {
         if left.is_zero() {
             bail!("timed out after {} bytes", out.len());
         }
-        let mut p = libc::pollfd { fd: f.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        let mut p = libc::pollfd {
+            fd: f.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
         unsafe { libc::poll(&mut p, 1, left.as_millis() as i32) };
         match f.read(&mut buf) {
             Ok(0) => return Ok(out),
@@ -299,27 +340,49 @@ fn write_async(fd: OwnedFd, data: Vec<u8>) {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 delegate_noop!(State: ignore WlSeat);
 delegate_noop!(State: ExtDataControlManagerV1);
 
 impl Dispatch<ExtDataControlDeviceV1, ()> for State {
-    fn event(st: &mut Self, _: &ExtDataControlDeviceV1, ev: device::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        st: &mut Self,
+        _: &ExtDataControlDeviceV1,
+        ev: device::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         match ev {
             device::Event::Selection { id } => {
                 if let Some(old) = st.selection.take() {
                     old.destroy();
                 }
-                let names = id.as_ref().map(|o| o.data::<OfferMimes>().unwrap().lock().unwrap().clone()).unwrap_or_default();
+                let names = id
+                    .as_ref()
+                    .map(|o| o.data::<OfferMimes>().unwrap().lock().unwrap().clone())
+                    .unwrap_or_default();
                 if names.iter().any(|n| n == MARKER) {
                     if let Some(o) = id {
                         o.destroy();
                     }
                     if let Some(own) = &st.own {
                         let types = if own.promised.is_empty() {
-                            own.content.0.iter().filter_map(|(m, _)| mime::canonical(m)).collect()
+                            own.content
+                                .0
+                                .iter()
+                                .filter_map(|(m, _)| mime::canonical(m))
+                                .collect()
                         } else {
                             own.promised.clone()
                         };
@@ -327,7 +390,8 @@ impl Dispatch<ExtDataControlDeviceV1, ()> for State {
                     }
                     return;
                 }
-                let mut offered: Vec<&'static str> = names.iter().filter_map(|n| mime::canonical(n)).collect();
+                let mut offered: Vec<&'static str> =
+                    names.iter().filter_map(|n| mime::canonical(n)).collect();
                 offered.sort();
                 offered.dedup();
                 *st.shared.offered.lock().unwrap() = offered;
@@ -349,7 +413,14 @@ impl Dispatch<ExtDataControlDeviceV1, ()> for State {
 }
 
 impl Dispatch<ExtDataControlOfferV1, OfferMimes> for State {
-    fn event(_: &mut Self, _: &ExtDataControlOfferV1, ev: offer::Event, names: &OfferMimes, _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        _: &mut Self,
+        _: &ExtDataControlOfferV1,
+        ev: offer::Event,
+        names: &OfferMimes,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let offer::Event::Offer { mime_type } = ev {
             names.lock().unwrap().push(mime_type);
         }
@@ -357,7 +428,14 @@ impl Dispatch<ExtDataControlOfferV1, OfferMimes> for State {
 }
 
 impl Dispatch<ExtDataControlSourceV1, ()> for State {
-    fn event(st: &mut Self, src: &ExtDataControlSourceV1, ev: source::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        st: &mut Self,
+        src: &ExtDataControlSourceV1,
+        ev: source::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         let Some(own) = st.own.as_ref().filter(|o| &o.source == src) else {
             if let source::Event::Cancelled = ev {
                 src.destroy();
@@ -366,7 +444,9 @@ impl Dispatch<ExtDataControlSourceV1, ()> for State {
         };
         match ev {
             source::Event::Send { mime_type, fd } => {
-                let Some(m) = mime::canonical(&mime_type) else { return };
+                let Some(m) = mime::canonical(&mime_type) else {
+                    return;
+                };
                 match own.content.get(m) {
                     Some(d) => write_async(fd, d.to_vec()),
                     None if own.promised.contains(&m) => {

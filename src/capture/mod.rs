@@ -42,8 +42,8 @@ pub use alloc::Memory;
 pub use cpu_source::CaptureSource;
 pub use diff::{Nv12Target, TileDiffer};
 pub use gl::PlaneDesc;
-pub use mapping::ReadGuard;
 use mapping::Mapping;
+pub use mapping::ReadGuard;
 
 const MAX_BUFFERS: usize = 4;
 
@@ -117,7 +117,10 @@ pub struct Frame {
 
 /// CLOCK_MONOTONIC, comparable with `Frame::presented`.
 pub fn monotonic_now() -> Duration {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
     Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
 }
@@ -134,7 +137,7 @@ impl Capturer {
         Self::with_options(output, CaptureOptions::default())
     }
 
-        pub fn with_options(output: Option<&str>, opts: CaptureOptions) -> Result<Self> {
+    pub fn with_options(output: Option<&str>, opts: CaptureOptions) -> Result<Self> {
         let protocol = opts.protocol;
         let conn = crate::display::connect_wayland().context("connect to Wayland")?;
         let (globals, mut queue) = registry_queue_init::<State>(&conn)?;
@@ -144,7 +147,10 @@ impl Capturer {
         state.alloc.memory = opts.memory;
         queue.roundtrip(&mut state)?;
         let wl_output = match output {
-            Some(name) => state.outputs.iter().find(|(_, n)| n.as_deref() == Some(name)),
+            Some(name) => state
+                .outputs
+                .iter()
+                .find(|(_, n)| n.as_deref() == Some(name)),
             None => state.outputs.first(),
         }
         .map(|(o, _)| o.clone())
@@ -173,7 +179,11 @@ impl Capturer {
     }
 
     pub fn protocol(&self) -> Protocol {
-        if self.state.ext.is_some() { Protocol::ExtImageCopyCapture } else { Protocol::WlrScreencopy }
+        if self.state.ext.is_some() {
+            Protocol::ExtImageCopyCapture
+        } else {
+            Protocol::WlrScreencopy
+        }
     }
 
     /// DRM render node of the GPU the buffers live on.
@@ -379,7 +389,9 @@ impl State {
             bail!("all {MAX_BUFFERS} capture buffers are still held by consumers");
         }
         let c = self.constraints.as_ref().context("no buffer constraints")?;
-        let alloc = self.alloc.allocate(c.width, c.height, c.fourcc, &c.modifiers)?;
+        let alloc = self
+            .alloc
+            .allocate(c.width, c.height, c.fourcc, &c.modifiers)?;
 
         let params = self.dmabuf.create_params(qh, ());
         for (i, p) in alloc.planes.iter().enumerate() {
@@ -448,7 +460,12 @@ impl State {
         let mut damage = f.damage;
         tracing::trace!(?damage, "compositor damage");
         if self.seq == 0 || damage.is_empty() {
-            damage = vec![Rect { x: 0, y: 0, width: buffer.width, height: buffer.height }];
+            damage = vec![Rect {
+                x: 0,
+                y: 0,
+                width: buffer.width,
+                height: buffer.height,
+            }];
         }
         self.seq += 1;
         Frame {
@@ -524,12 +541,19 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, ()> for State {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            ext_session::Event::BufferSize { width, height } => state.pending_size = (width, height),
+            ext_session::Event::BufferSize { width, height } => {
+                state.pending_size = (width, height)
+            }
             ext_session::Event::DmabufDevice { device } => {
                 state.pending_device = device.try_into().ok().map(u64::from_ne_bytes);
             }
             ext_session::Event::DmabufFormat { format, modifiers } => {
-                let mods = modifiers.as_chunks::<8>().0.iter().map(|c| u64::from_ne_bytes(*c)).collect();
+                let mods = modifiers
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|c| u64::from_ne_bytes(*c))
+                    .collect();
                 state.pending.push((format, mods));
             }
             ext_session::Event::Done => {
@@ -549,7 +573,12 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, ()> for State {
                 }
                 let (width, height) = state.pending_size;
                 tracing::debug!(width, height, fourcc, ?modifiers, "ext capture constraints");
-                state.set_constraints(Constraints { width, height, fourcc, modifiers });
+                state.set_constraints(Constraints {
+                    width,
+                    height,
+                    fourcc,
+                    modifiers,
+                });
             }
             ext_session::Event::Stopped => state.stopped = true,
             _ => {}
@@ -566,15 +595,26 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        let Some(f) = state.inflight_mut() else { return };
+        let Some(f) = state.inflight_mut() else {
+            return;
+        };
         match event {
-            ext_frame::Event::Damage { x, y, width, height } => f.damage.push(Rect {
+            ext_frame::Event::Damage {
+                x,
+                y,
+                width,
+                height,
+            } => f.damage.push(Rect {
                 x: x.max(0) as u32,
                 y: y.max(0) as u32,
                 width: width.max(0) as u32,
                 height: height.max(0) as u32,
             }),
-            ext_frame::Event::PresentationTime { tv_sec_hi, tv_sec_lo, tv_nsec } => {
+            ext_frame::Event::PresentationTime {
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+            } => {
                 f.presented = Some(timestamp(tv_sec_hi, tv_sec_lo, tv_nsec));
             }
             ext_frame::Event::Ready => f.status = Status::Ready,
@@ -599,21 +639,31 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for State {
         qh: &QueueHandle<Self>,
     ) {
         match event {
-            wlr_frame::Event::LinuxDmabuf { format, width, height } => {
+            wlr_frame::Event::LinuxDmabuf {
+                format,
+                width,
+                height,
+            } => {
                 state.pending.push((format, Vec::new()));
                 state.pending_size = (width, height);
             }
             wlr_frame::Event::BufferDone => {
                 let formats = std::mem::take(&mut state.pending);
-                let Some(&fourcc) =
-                    PREFERRED_FORMATS.iter().find(|f| formats.iter().any(|(g, _)| g == *f))
+                let Some(&fourcc) = PREFERRED_FORMATS
+                    .iter()
+                    .find(|f| formats.iter().any(|(g, _)| g == *f))
                 else {
                     tracing::error!(?formats, "no supported dmabuf format offered");
                     state.stopped = true;
                     return;
                 };
                 let (width, height) = state.pending_size;
-                state.set_constraints(Constraints { width, height, fourcc, modifiers: Vec::new() });
+                state.set_constraints(Constraints {
+                    width,
+                    height,
+                    fourcc,
+                    modifiers: Vec::new(),
+                });
                 match state.take_buffer(qh) {
                     Ok(buffer) => {
                         frame.copy_with_damage(&buffer.wl_buffer);
@@ -629,12 +679,26 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for State {
                     }
                 }
             }
-            wlr_frame::Event::Damage { x, y, width, height } => {
+            wlr_frame::Event::Damage {
+                x,
+                y,
+                width,
+                height,
+            } => {
                 if let Some(f) = state.inflight_mut() {
-                    f.damage.push(Rect { x, y, width, height });
+                    f.damage.push(Rect {
+                        x,
+                        y,
+                        width,
+                        height,
+                    });
                 }
             }
-            wlr_frame::Event::Ready { tv_sec_hi, tv_sec_lo, tv_nsec } => {
+            wlr_frame::Event::Ready {
+                tv_sec_hi,
+                tv_sec_lo,
+                tv_nsec,
+            } => {
                 if let Some(f) = state.inflight_mut() {
                     f.presented = Some(timestamp(tv_sec_hi, tv_sec_lo, tv_nsec));
                     f.status = Status::Ready;

@@ -62,7 +62,13 @@ const AOT_ER_AAC_ELD: u32 = 39;
 type OpenFn = unsafe extern "C" fn(*mut Handle, u32, u32) -> i32;
 type CloseFn = unsafe extern "C" fn(*mut Handle) -> i32;
 type SetParamFn = unsafe extern "C" fn(Handle, u32, u32) -> i32;
-type EncodeFn = unsafe extern "C" fn(Handle, *const BufDesc, *const BufDesc, *const InArgs, *mut OutArgs) -> i32;
+type EncodeFn = unsafe extern "C" fn(
+    Handle,
+    *const BufDesc,
+    *const BufDesc,
+    *const InArgs,
+    *mut OutArgs,
+) -> i32;
 type InfoFn = unsafe extern "C" fn(Handle, *mut InfoStruct) -> i32;
 
 struct Api {
@@ -77,24 +83,33 @@ struct Api {
 impl Api {
     fn load() -> Result<Self> {
         let mut lib = std::ptr::null_mut();
-        for name in ["libfdk-aac.so.2", "libfdk-aac.so",] {
+        for name in ["libfdk-aac.so.2", "libfdk-aac.so"] {
             let c = CString::new(name).unwrap();
             lib = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
             if !lib.is_null() {
                 break;
             }
         }
-        ensure!(!lib.is_null(), "libfdk-aac not found (install the libfdk-aac package)");
+        ensure!(
+            !lib.is_null(),
+            "libfdk-aac not found (install the libfdk-aac package)"
+        );
         let sym = |n: &str| -> Result<*mut c_void> {
             let c = CString::new(n).unwrap();
             let p = unsafe { libc::dlsym(lib, c.as_ptr()) };
-            if p.is_null() { Err(anyhow!("libfdk-aac lacks {n}")) } else { Ok(p) }
+            if p.is_null() {
+                Err(anyhow!("libfdk-aac lacks {n}"))
+            } else {
+                Ok(p)
+            }
         };
         unsafe {
             Ok(Self {
                 open: std::mem::transmute::<*mut c_void, OpenFn>(sym("aacEncOpen")?),
                 close: std::mem::transmute::<*mut c_void, CloseFn>(sym("aacEncClose")?),
-                set_param: std::mem::transmute::<*mut c_void, SetParamFn>(sym("aacEncoder_SetParam")?),
+                set_param: std::mem::transmute::<*mut c_void, SetParamFn>(sym(
+                    "aacEncoder_SetParam",
+                )?),
                 encode: std::mem::transmute::<*mut c_void, EncodeFn>(sym("aacEncEncode")?),
                 info: std::mem::transmute::<*mut c_void, InfoFn>(sym("aacEncInfo")?),
                 _lib: lib,
@@ -113,7 +128,11 @@ pub struct EncoderConfig {
 
 impl Default for EncoderConfig {
     fn default() -> Self {
-        Self { bitrate: 128_000, sbr: false, bandwidth: 20_000 }
+        Self {
+            bitrate: 128_000,
+            sbr: false,
+            bandwidth: 20_000,
+        }
     }
 }
 
@@ -138,7 +157,13 @@ impl AacEldEncoder {
         let mut h: Handle = std::ptr::null_mut();
         let e = unsafe { (api.open)(&mut h, 0, CHANNELS) };
         ensure!(e == 0 && !h.is_null(), "aacEncOpen failed: {e:#x}");
-        let mut enc = Self { api, h, out: vec![0; 8192], asc: Vec::new(), frame_length: 0 };
+        let mut enc = Self {
+            api,
+            h,
+            out: vec![0; 8192],
+            asc: Vec::new(),
+            frame_length: 0,
+        };
         for (p, v) in [
             (AACENC_AOT, AOT_ER_AAC_ELD),
             (AACENC_SAMPLERATE, CLOCK_RATE),
@@ -156,14 +181,30 @@ impl AacEldEncoder {
             let e = unsafe { (enc.api.set_param)(enc.h, p, v) };
             ensure!(e == 0, "aacEncoder_SetParam({p:#x}, {v}) failed: {e:#x}");
         }
-        let e = unsafe { (enc.api.encode)(enc.h, std::ptr::null(), std::ptr::null(), std::ptr::null(), std::ptr::null_mut()) };
-        ensure!(e == 0, "aacEncEncode init failed: {e:#x} (bitrate {} unsupported?)", cfg.bitrate);
+        let e = unsafe {
+            (enc.api.encode)(
+                enc.h,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            )
+        };
+        ensure!(
+            e == 0,
+            "aacEncEncode init failed: {e:#x} (bitrate {} unsupported?)",
+            cfg.bitrate
+        );
         let mut info: InfoStruct = unsafe { std::mem::zeroed() };
         let e = unsafe { (enc.api.info)(enc.h, &mut info) };
         ensure!(e == 0, "aacEncInfo failed: {e:#x}");
         enc.asc = info.conf_buf[..info.conf_size.min(64) as usize].to_vec();
         enc.frame_length = info.frame_length;
-        ensure!(enc.frame_length == SAMPLES_PER_FRAME, "encoder frame length {}", enc.frame_length);
+        ensure!(
+            enc.frame_length == SAMPLES_PER_FRAME,
+            "encoder frame length {}",
+            enc.frame_length
+        );
         enc.out.resize(info.max_out_buf_bytes.max(1024) as usize, 0);
         Ok(enc)
     }
@@ -180,24 +221,44 @@ impl AacEldEncoder {
     /// Encodes one 10 ms frame of interleaved stereo i16 (960 values). Returns an AU once the
     /// encoder's look-ahead is filled (the first few calls return `None`).
     pub fn encode(&mut self, pcm: &[i16]) -> Result<Option<Vec<u8>>> {
-        ensure!(pcm.len() == (SAMPLES_PER_FRAME * CHANNELS) as usize, "need {} samples", SAMPLES_PER_FRAME * CHANNELS);
+        ensure!(
+            pcm.len() == (SAMPLES_PER_FRAME * CHANNELS) as usize,
+            "need {} samples",
+            SAMPLES_PER_FRAME * CHANNELS
+        );
         let mut in_ptr = pcm.as_ptr() as *mut c_void;
         let mut in_id = IN_AUDIO_DATA;
         let mut in_size = (pcm.len() * 2) as i32;
         let mut in_el = 2i32;
-        let in_desc = BufDesc { num_bufs: 1, bufs: &mut in_ptr, buffer_identifiers: &mut in_id, buf_sizes: &mut in_size, buf_el_sizes: &mut in_el };
+        let in_desc = BufDesc {
+            num_bufs: 1,
+            bufs: &mut in_ptr,
+            buffer_identifiers: &mut in_id,
+            buf_sizes: &mut in_size,
+            buf_el_sizes: &mut in_el,
+        };
         let mut out_ptr = self.out.as_mut_ptr() as *mut c_void;
         let mut out_id = OUT_BITSTREAM_DATA;
         let mut out_size = self.out.len() as i32;
         let mut out_el = 1i32;
-        let out_desc = BufDesc { num_bufs: 1, bufs: &mut out_ptr, buffer_identifiers: &mut out_id, buf_sizes: &mut out_size, buf_el_sizes: &mut out_el };
-        let in_args = InArgs { num_in_samples: pcm.len() as i32, num_anc_bytes: 0 };
+        let out_desc = BufDesc {
+            num_bufs: 1,
+            bufs: &mut out_ptr,
+            buffer_identifiers: &mut out_id,
+            buf_sizes: &mut out_size,
+            buf_el_sizes: &mut out_el,
+        };
+        let in_args = InArgs {
+            num_in_samples: pcm.len() as i32,
+            num_anc_bytes: 0,
+        };
         let mut out_args = OutArgs::default();
         let e = unsafe { (self.api.encode)(self.h, &in_desc, &out_desc, &in_args, &mut out_args) };
         if e != 0 {
             bail!("aacEncEncode failed: {e:#x}");
         }
-        Ok((out_args.num_out_bytes > 0).then(|| self.out[..out_args.num_out_bytes as usize].to_vec()))
+        Ok((out_args.num_out_bytes > 0)
+            .then(|| self.out[..out_args.num_out_bytes as usize].to_vec()))
     }
 }
 

@@ -13,7 +13,8 @@ pub fn connect_wayland() -> Result<wayland_client::Connection> {
         return Ok(wayland_client::Connection::connect_to_env()?);
     }
     let path = hyprland::wayland_socket()?;
-    let stream = std::os::unix::net::UnixStream::connect(&path).with_context(|| format!("connect {}", path.display()))?;
+    let stream = std::os::unix::net::UnixStream::connect(&path)
+        .with_context(|| format!("connect {}", path.display()))?;
     Ok(wayland_client::Connection::from_socket(stream)?)
 }
 
@@ -40,7 +41,12 @@ pub struct OutputInfo {
 
 impl OutputInfo {
     pub fn mode(&self) -> DisplayMode {
-        DisplayMode { width: self.width, height: self.height, refresh_hz: self.refresh_hz, scale: self.scale }
+        DisplayMode {
+            width: self.width,
+            height: self.height,
+            refresh_hz: self.refresh_hz,
+            scale: self.scale,
+        }
     }
 }
 
@@ -59,7 +65,12 @@ pub fn fit_mode(width: u32, height: u32, refresh_hz: f64, scale: f64) -> Display
     let n = ((scale * 120.0).round() as u32).max(1);
     let step = n / gcd(n, 120);
     let fit = |v: u32| (v / step * step).max(step);
-    DisplayMode { width: fit(width), height: fit(height), refresh_hz, scale: n as f64 / 120.0 }
+    DisplayMode {
+        width: fit(width),
+        height: fit(height),
+        refresh_hz,
+        scale: n as f64 / 120.0,
+    }
 }
 
 fn gcd(a: u32, b: u32) -> u32 {
@@ -72,7 +83,15 @@ mod tests {
 
     #[test]
     fn fit_mode_rounds_to_scale() {
-        assert_eq!(fit_mode(3456, 2160, 60.0, 2.0), DisplayMode { width: 3456, height: 2160, refresh_hz: 60.0, scale: 2.0 });
+        assert_eq!(
+            fit_mode(3456, 2160, 60.0, 2.0),
+            DisplayMode {
+                width: 3456,
+                height: 2160,
+                refresh_hz: 60.0,
+                scale: 2.0
+            }
+        );
         let m = fit_mode(2001, 1333, 60.0, 2.0);
         assert_eq!((m.width, m.height), (2000, 1332));
         let m = fit_mode(2001, 1333, 60.0, 1.5);

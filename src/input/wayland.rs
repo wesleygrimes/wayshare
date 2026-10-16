@@ -10,10 +10,12 @@ use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{wl_output, wl_pointer, wl_registry, wl_seat::WlSeat};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
-    zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1, zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
+    zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1,
+    zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
 };
 use wayland_protocols_wlr::virtual_pointer::v1::client::{
-    zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1, zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
+    zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
+    zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
 };
 
 use super::keyboard::{KbAction, KeyboardConfig, KeyboardEngine, layout_for_input_source};
@@ -27,11 +29,26 @@ struct State {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<wl_output::WlOutput, ()> for State {
-    fn event(state: &mut Self, o: &wl_output::WlOutput, ev: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        o: &wl_output::WlOutput,
+        ev: wl_output::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let wl_output::Event::Name { name } = ev
             && let Some(e) = state.outputs.iter_mut().find(|(w, _)| w == o)
         {
@@ -62,19 +79,34 @@ pub struct WaylandInput {
 impl WaylandInput {
     /// Binds to `$WAYLAND_DISPLAY`. With `output`, pointer coordinates are relative to that
     /// output; otherwise to the whole layout.
-    pub fn connect(output: Option<&str>, width: u32, height: u32, kcfg: KeyboardConfig, pcfg: PointerConfig) -> Result<Self> {
+    pub fn connect(
+        output: Option<&str>,
+        width: u32,
+        height: u32,
+        kcfg: KeyboardConfig,
+        pcfg: PointerConfig,
+    ) -> Result<Self> {
         let conn = crate::display::connect_wayland().context("connect to Wayland display")?;
         let (globals, mut queue) = registry_queue_init::<State>(&conn)?;
         let qh = queue.handle();
         let seat: WlSeat = globals.bind(&qh, 1..=1, ()).context("wl_seat")?;
-        let vpm: ZwlrVirtualPointerManagerV1 =
-            globals.bind(&qh, 1..=2, ()).context("zwlr_virtual_pointer_manager_v1 not offered")?;
-        let vkm: ZwpVirtualKeyboardManagerV1 =
-            globals.bind(&qh, 1..=1, ()).context("zwp_virtual_keyboard_manager_v1 not offered")?;
-        let mut state = State { outputs: Vec::new() };
+        let vpm: ZwlrVirtualPointerManagerV1 = globals
+            .bind(&qh, 1..=2, ())
+            .context("zwlr_virtual_pointer_manager_v1 not offered")?;
+        let vkm: ZwpVirtualKeyboardManagerV1 = globals
+            .bind(&qh, 1..=1, ())
+            .context("zwp_virtual_keyboard_manager_v1 not offered")?;
+        let mut state = State {
+            outputs: Vec::new(),
+        };
         globals.contents().with_list(|list| {
-            for g in list.iter().filter(|g| g.interface == "wl_output" && g.version >= 4) {
-                let o = globals.registry().bind::<wl_output::WlOutput, _, _>(g.name, 4, &qh, ());
+            for g in list
+                .iter()
+                .filter(|g| g.interface == "wl_output" && g.version >= 4)
+            {
+                let o = globals
+                    .registry()
+                    .bind::<wl_output::WlOutput, _, _>(g.name, 4, &qh, ());
                 state.outputs.push((o, None));
             }
         });
@@ -83,7 +115,10 @@ impl WaylandInput {
         let pointer = match output {
             Some(name) => {
                 if vpm.version() < 2 {
-                    bail!("virtual pointer manager v{} can't bind to an output", vpm.version());
+                    bail!(
+                        "virtual pointer manager v{} can't bind to an output",
+                        vpm.version()
+                    );
                 }
                 let (o, _) = state
                     .outputs
@@ -109,13 +144,17 @@ impl WaylandInput {
         };
         let init = me.kb.init();
         me.run_kb(init)?;
-        me.queue.roundtrip(&mut me.state).context("virtual input setup rejected")?;
+        me.queue
+            .roundtrip(&mut me.state)
+            .context("virtual input setup rejected")?;
         Ok(me)
     }
 
     /// Round trip to the compositor; surfaces protocol errors from earlier requests.
     pub fn sync(&mut self) -> Result<()> {
-        self.queue.roundtrip(&mut self.state).context("wayland roundtrip")?;
+        self.queue
+            .roundtrip(&mut self.state)
+            .context("wayland roundtrip")?;
         Ok(())
     }
 
@@ -129,11 +168,14 @@ impl WaylandInput {
             match a {
                 KbAction::Keymap(text) => {
                     let fd = keymap_fd(&text)?;
-                    self.keyboard.keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), text.len() as u32 + 1);
+                    self.keyboard
+                        .keymap(KEYMAP_FORMAT_XKB_V1, fd.as_fd(), text.len() as u32 + 1);
                     self._keymap = Some(fd);
                 }
                 KbAction::Key { code, down } => self.keyboard.key(t, code, down as u32),
-                KbAction::Modifiers { depressed, locked } => self.keyboard.modifiers(depressed, 0, locked, 0),
+                KbAction::Modifiers { depressed, locked } => {
+                    self.keyboard.modifiers(depressed, 0, locked, 0)
+                }
             }
         }
         self.flush()
@@ -147,9 +189,18 @@ impl WaylandInput {
         };
         for a in actions {
             match a {
-                PtrAction::Motion { x, y, width, height } => self.pointer.motion_absolute(t, x, y, width, height),
+                PtrAction::Motion {
+                    x,
+                    y,
+                    width,
+                    height,
+                } => self.pointer.motion_absolute(t, x, y, width, height),
                 PtrAction::Button { code, pressed } => {
-                    let s = if pressed { wl_pointer::ButtonState::Pressed } else { wl_pointer::ButtonState::Released };
+                    let s = if pressed {
+                        wl_pointer::ButtonState::Pressed
+                    } else {
+                        wl_pointer::ButtonState::Released
+                    };
                     self.pointer.button(t, code, s)
                 }
                 PtrAction::AxisSource(s) => self.pointer.axis_source(match s {
@@ -157,7 +208,11 @@ impl WaylandInput {
                     AxisSource::Finger => wl_pointer::AxisSource::Finger,
                 }),
                 PtrAction::Axis { axis: a, value } => self.pointer.axis(t, axis(a), value),
-                PtrAction::AxisDiscrete { axis: a, value, steps } => self.pointer.axis_discrete(t, axis(a), value, steps),
+                PtrAction::AxisDiscrete {
+                    axis: a,
+                    value,
+                    steps,
+                } => self.pointer.axis_discrete(t, axis(a), value, steps),
                 PtrAction::AxisStop(a) => self.pointer.axis_stop(t, axis(a)),
                 PtrAction::Frame => self.pointer.frame(),
             }
@@ -171,7 +226,8 @@ impl WaylandInput {
         if let Some(guard) = self.conn.prepare_read() {
             match guard.read() {
                 Ok(_) => {}
-                Err(wayland_client::backend::WaylandError::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(wayland_client::backend::WaylandError::Io(e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock => {}
                 Err(e) => return Err(e).context("wayland read"),
             }
         }
@@ -196,7 +252,12 @@ impl InputSink for WaylandInput {
     fn key(&mut self, down: bool, keysym: u32, mac_keycode: Option<u16>) -> Result<()> {
         let a = self.kb.key(down, keysym, mac_keycode);
         if a.is_empty() {
-            debug!(down, keysym = format_args!("{keysym:#x}"), ?mac_keycode, "key dropped");
+            debug!(
+                down,
+                keysym = format_args!("{keysym:#x}"),
+                ?mac_keycode,
+                "key dropped"
+            );
         }
         self.run_kb(a)
     }

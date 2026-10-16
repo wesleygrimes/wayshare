@@ -34,11 +34,26 @@ pub enum AxisSource {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PtrAction {
-    Motion { x: u32, y: u32, width: u32, height: u32 },
-    Button { code: u32, pressed: bool },
+    Motion {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    },
+    Button {
+        code: u32,
+        pressed: bool,
+    },
     AxisSource(AxisSource),
-    Axis { axis: Axis, value: f64 },
-    AxisDiscrete { axis: Axis, value: f64, steps: i32 },
+    Axis {
+        axis: Axis,
+        value: f64,
+    },
+    AxisDiscrete {
+        axis: Axis,
+        value: f64,
+        steps: i32,
+    },
     AxisStop(Axis),
     Frame,
 }
@@ -55,7 +70,11 @@ pub struct PointerConfig {
 
 impl Default for PointerConfig {
     fn default() -> Self {
-        Self { buttons: ButtonOrder::Mac, momentum: false, invert_scroll: false }
+        Self {
+            buttons: ButtonOrder::Mac,
+            momentum: false,
+            invert_scroll: false,
+        }
     }
 }
 
@@ -70,7 +89,13 @@ pub struct PointerEngine {
 
 impl PointerEngine {
     pub fn new(cfg: PointerConfig, width: u32, height: u32) -> Self {
-        Self { cfg, width: width.max(1), height: height.max(1), pos: None, buttons: 0 }
+        Self {
+            cfg,
+            width: width.max(1),
+            height: height.max(1),
+            pos: None,
+            buttons: 0,
+        }
     }
 
     pub fn set_extent(&mut self, width: u32, height: u32) {
@@ -86,7 +111,12 @@ impl PointerEngine {
         let y = y.clamp(0, self.height as i32 - 1) as u32;
         if self.pos != Some((x, y)) {
             self.pos = Some((x, y));
-            out.push(PtrAction::Motion { x, y, width: self.width, height: self.height });
+            out.push(PtrAction::Motion {
+                x,
+                y,
+                width: self.width,
+                height: self.height,
+            });
         }
         let want = match self.cfg.buttons {
             ButtonOrder::Mac => mask & 7,
@@ -94,11 +124,19 @@ impl PointerEngine {
         };
         for (bit, code) in [(1u8, BTN_LEFT), (2, BTN_RIGHT), (4, BTN_MIDDLE)] {
             if (want ^ self.buttons) & bit != 0 {
-                out.push(PtrAction::Button { code, pressed: want & bit != 0 });
+                out.push(PtrAction::Button {
+                    code,
+                    pressed: want & bit != 0,
+                });
             }
         }
         self.buttons = want;
-        let wheel = [(8u8, Axis::Vertical, -1), (16, Axis::Vertical, 1), (32, Axis::Horizontal, -1), (64, Axis::Horizontal, 1)];
+        let wheel = [
+            (8u8, Axis::Vertical, -1),
+            (16, Axis::Vertical, 1),
+            (32, Axis::Horizontal, -1),
+            (64, Axis::Horizontal, 1),
+        ];
         let mut sourced = false;
         for (bit, axis, steps) in wheel {
             if mask & bit != 0 {
@@ -107,7 +145,11 @@ impl PointerEngine {
                     sourced = true;
                 }
                 let steps = self.sign(steps);
-                out.push(PtrAction::AxisDiscrete { axis, value: steps as f64 * WHEEL_STEP, steps });
+                out.push(PtrAction::AxisDiscrete {
+                    axis,
+                    value: steps as f64 * WHEEL_STEP,
+                    steps,
+                });
             }
         }
         if !out.is_empty() {
@@ -131,10 +173,15 @@ impl PointerEngine {
             out.push(PtrAction::AxisSource(AxisSource::Finger));
             for (axis, _, px) in axes {
                 if px != 0 {
-                    out.push(PtrAction::Axis { axis, value: self.sign(-px) as f64 });
+                    out.push(PtrAction::Axis {
+                        axis,
+                        value: self.sign(-px) as f64,
+                    });
                 }
             }
-            if ev.momentum_phase == 0 && ev.scroll_phase & (SCROLL_PHASE_ENDED | SCROLL_PHASE_CANCELLED) != 0 {
+            if ev.momentum_phase == 0
+                && ev.scroll_phase & (SCROLL_PHASE_ENDED | SCROLL_PHASE_CANCELLED) != 0
+            {
                 out.push(PtrAction::AxisStop(Axis::Vertical));
                 out.push(PtrAction::AxisStop(Axis::Horizontal));
             }
@@ -143,9 +190,16 @@ impl PointerEngine {
             for (axis, lines, px) in axes {
                 if lines != 0 {
                     let steps = self.sign(-(lines as i32));
-                    out.push(PtrAction::AxisDiscrete { axis, value: steps as f64 * WHEEL_STEP, steps });
+                    out.push(PtrAction::AxisDiscrete {
+                        axis,
+                        value: steps as f64 * WHEEL_STEP,
+                        steps,
+                    });
                 } else if px != 0 {
-                    out.push(PtrAction::Axis { axis, value: self.sign(-px) as f64 });
+                    out.push(PtrAction::Axis {
+                        axis,
+                        value: self.sign(-px) as f64,
+                    });
                 }
             }
         }
@@ -160,7 +214,10 @@ impl PointerEngine {
         let mut out: Vec<PtrAction> = [(1u8, BTN_LEFT), (2, BTN_RIGHT), (4, BTN_MIDDLE)]
             .into_iter()
             .filter(|(bit, _)| self.buttons & bit != 0)
-            .map(|(_, code)| PtrAction::Button { code, pressed: false })
+            .map(|(_, code)| PtrAction::Button {
+                code,
+                pressed: false,
+            })
             .collect();
         self.buttons = 0;
         if !out.is_empty() {
@@ -186,7 +243,18 @@ mod tests {
     #[test]
     fn motion_clamps_and_dedups() {
         let mut p = eng();
-        assert_eq!(p.pointer(5000, -3, 0), vec![P::Motion { x: 3455, y: 0, width: 3456, height: 2160 }, P::Frame]);
+        assert_eq!(
+            p.pointer(5000, -3, 0),
+            vec![
+                P::Motion {
+                    x: 3455,
+                    y: 0,
+                    width: 3456,
+                    height: 2160
+                },
+                P::Frame
+            ]
+        );
         assert!(p.pointer(5000, -3, 0).is_empty());
     }
 
@@ -194,50 +262,120 @@ mod tests {
     fn mac_button_order() {
         let mut p = eng();
         p.pointer(1, 1, 0);
-        assert_eq!(p.pointer(1, 1, 2), vec![P::Button { code: BTN_RIGHT, pressed: true }, P::Frame]);
-        assert_eq!(p.pointer(1, 1, 4), vec![
-            P::Button { code: BTN_RIGHT, pressed: false },
-            P::Button { code: BTN_MIDDLE, pressed: true },
-            P::Frame
-        ]);
+        assert_eq!(
+            p.pointer(1, 1, 2),
+            vec![
+                P::Button {
+                    code: BTN_RIGHT,
+                    pressed: true
+                },
+                P::Frame
+            ]
+        );
+        assert_eq!(
+            p.pointer(1, 1, 4),
+            vec![
+                P::Button {
+                    code: BTN_RIGHT,
+                    pressed: false
+                },
+                P::Button {
+                    code: BTN_MIDDLE,
+                    pressed: true
+                },
+                P::Frame
+            ]
+        );
     }
 
     #[test]
     fn rfb_button_order() {
-        let mut p = PointerEngine::new(PointerConfig { buttons: ButtonOrder::Rfb, ..Default::default() }, 10, 10);
+        let mut p = PointerEngine::new(
+            PointerConfig {
+                buttons: ButtonOrder::Rfb,
+                ..Default::default()
+            },
+            10,
+            10,
+        );
         p.pointer(1, 1, 0);
-        assert_eq!(p.pointer(1, 1, 2), vec![P::Button { code: BTN_MIDDLE, pressed: true }, P::Frame]);
-        assert_eq!(p.pointer(1, 1, 4), vec![
-            P::Button { code: BTN_RIGHT, pressed: true },
-            P::Button { code: BTN_MIDDLE, pressed: false },
-            P::Frame
-        ]);
+        assert_eq!(
+            p.pointer(1, 1, 2),
+            vec![
+                P::Button {
+                    code: BTN_MIDDLE,
+                    pressed: true
+                },
+                P::Frame
+            ]
+        );
+        assert_eq!(
+            p.pointer(1, 1, 4),
+            vec![
+                P::Button {
+                    code: BTN_RIGHT,
+                    pressed: true
+                },
+                P::Button {
+                    code: BTN_MIDDLE,
+                    pressed: false
+                },
+                P::Frame
+            ]
+        );
     }
 
     #[test]
     fn wheel_bits() {
         let mut p = eng();
         p.pointer(1, 1, 0);
-        assert_eq!(p.pointer(1, 1, 8), vec![
-            P::AxisSource(AxisSource::Wheel),
-            P::AxisDiscrete { axis: Axis::Vertical, value: -15.0, steps: -1 },
-            P::Frame
-        ]);
-        assert_eq!(p.pointer(1, 1, 64)[1], P::AxisDiscrete { axis: Axis::Horizontal, value: 15.0, steps: 1 });
+        assert_eq!(
+            p.pointer(1, 1, 8),
+            vec![
+                P::AxisSource(AxisSource::Wheel),
+                P::AxisDiscrete {
+                    axis: Axis::Vertical,
+                    value: -15.0,
+                    steps: -1
+                },
+                P::Frame
+            ]
+        );
+        assert_eq!(
+            p.pointer(1, 1, 64)[1],
+            P::AxisDiscrete {
+                axis: Axis::Horizontal,
+                value: 15.0,
+                steps: 1
+            }
+        );
     }
 
     fn scroll(flags: u32, lines_y: i16, point_y: i32, phase: u32, momentum: u32) -> ScrollEvent {
-        ScrollEvent { lines_y, point_y, flags, scroll_phase: phase, momentum_phase: momentum, ..Default::default() }
+        ScrollEvent {
+            lines_y,
+            point_y,
+            flags,
+            scroll_phase: phase,
+            momentum_phase: momentum,
+            ..Default::default()
+        }
     }
 
     #[test]
     fn trackpad_scroll_is_finger_with_stop() {
         let mut p = eng();
-        assert_eq!(p.scroll(&scroll(2, 0, 12, 2, 0)), vec![
-            P::AxisSource(AxisSource::Finger),
-            P::Axis { axis: Axis::Vertical, value: -12.0 },
-            P::Frame
-        ]);
+        assert_eq!(
+            p.scroll(&scroll(2, 0, 12, 2, 0)),
+            vec![
+                P::AxisSource(AxisSource::Finger),
+                P::Axis {
+                    axis: Axis::Vertical,
+                    value: -12.0
+                },
+                P::Frame
+            ]
+        );
         let end = p.scroll(&scroll(2, 0, 0, 4, 0));
         assert!(end.contains(&P::AxisStop(Axis::Vertical)));
         assert!(p.scroll(&scroll(2, 0, 30, 0, 2)).is_empty());
@@ -246,10 +384,17 @@ mod tests {
     #[test]
     fn wheel_scroll_is_discrete() {
         let mut p = eng();
-        assert_eq!(p.scroll(&scroll(0, -2, -20, 0, 0)), vec![
-            P::AxisSource(AxisSource::Wheel),
-            P::AxisDiscrete { axis: Axis::Vertical, value: 30.0, steps: 2 },
-            P::Frame
-        ]);
+        assert_eq!(
+            p.scroll(&scroll(0, -2, -20, 0, 0)),
+            vec![
+                P::AxisSource(AxisSource::Wheel),
+                P::AxisDiscrete {
+                    axis: Axis::Vertical,
+                    value: 30.0,
+                    steps: 2
+                },
+                P::Frame
+            ]
+        );
     }
 }

@@ -54,7 +54,10 @@ mod tests {
         std::fs::create_dir_all(root.join("shims")).unwrap();
         std::fs::write(root.join("shims/wayshare"), b"").unwrap();
         assert_eq!(exec_path(&exe), root.join("shims/wayshare"));
-        assert_eq!(exec_path(Path::new("/usr/bin/wayshare")), Path::new("/usr/bin/wayshare"));
+        assert_eq!(
+            exec_path(Path::new("/usr/bin/wayshare")),
+            Path::new("/usr/bin/wayshare")
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 

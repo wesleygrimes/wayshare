@@ -1256,7 +1256,10 @@ mod tests {
         let mut client = TcpStream::connect(addr).await.unwrap();
         assert_eq!(drive_client(&mut client, "wes", "pw").await.unwrap(), 0);
         client.write_all(&[0x81]).await.unwrap();
-        client.write_all(include_bytes!("../../tests/fixtures/msg29-0.bin")).await.unwrap();
+        client
+            .write_all(include_bytes!("../../tests/fixtures/msg29-0.bin"))
+            .await
+            .unwrap();
         for _ in 0..100 {
             if log.has("configure 1") {
                 break;
@@ -1320,8 +1323,16 @@ mod tests {
 
     struct ResizingDisplay;
     impl DisplayControl for ResizingDisplay {
-        fn configure(&self, _: SessionId, _: &apple::DisplayRequest) -> Result<Option<AppliedDisplay>> {
-            Ok(Some(AppliedDisplay { pixels: (80, 48), points: (40, 24), scale: 2.0 }))
+        fn configure(
+            &self,
+            _: SessionId,
+            _: &apple::DisplayRequest,
+        ) -> Result<Option<AppliedDisplay>> {
+            Ok(Some(AppliedDisplay {
+                pixels: (80, 48),
+                points: (40, 24),
+                scale: 2.0,
+            }))
         }
         fn restore(&self, _: SessionId) -> Result<()> {
             Ok(())
@@ -1329,7 +1340,11 @@ mod tests {
     }
 
     /// Running between `configure` and `stop`; `configure` fails while the third field is set.
-    struct ActiveHp(Arc<Log>, std::sync::atomic::AtomicBool, std::sync::atomic::AtomicBool);
+    struct ActiveHp(
+        Arc<Log>,
+        std::sync::atomic::AtomicBool,
+        std::sync::atomic::AtomicBool,
+    );
     impl ActiveHp {
         fn new(log: Arc<Log>) -> Self {
             Self(log, Default::default(), Default::default())
@@ -1340,12 +1355,22 @@ mod tests {
             self.0.push("ports".into());
             MediaPorts::default()
         }
-        fn configure(&self, _: SessionId, _: SocketAddr, _: MediaStreamConfig) -> Result<Option<MediaAnswer>> {
+        fn configure(
+            &self,
+            _: SessionId,
+            _: SocketAddr,
+            _: MediaStreamConfig,
+        ) -> Result<Option<MediaAnswer>> {
             if self.2.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err(anyhow!("configure failed"));
             }
             self.1.store(true, std::sync::atomic::Ordering::Relaxed);
-            Ok(Some(MediaAnswer { flags: 0, audio: Vec::new(), video1: Vec::new(), video2: Vec::new() }))
+            Ok(Some(MediaAnswer {
+                flags: 0,
+                audio: Vec::new(),
+                video1: Vec::new(),
+                video2: Vec::new(),
+            }))
         }
         fn stop(&self, _: SessionId) {
             self.1.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -1387,7 +1412,10 @@ mod tests {
         client.write_all(&msgs).await.unwrap();
         // Let a tick announce the new size before requesting it.
         tokio::time::sleep(Duration::from_millis(300)).await;
-        client.write_all(&[3, 0, 0, 0, 0, 0, 0, 80, 0, 48]).await.unwrap();
+        client
+            .write_all(&[3, 0, 0, 0, 0, 0, 0, 80, 0, 48])
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
         drop(client);
         if let Err(e) = server.await.unwrap() {
@@ -1431,7 +1459,10 @@ mod tests {
         client.write_all(&msgs).await.unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(!log.has("hp stop"), "{:?}", log.0.lock().unwrap());
-        client.write_all(include_bytes!("../../tests/fixtures/msg29-0.bin")).await.unwrap();
+        client
+            .write_all(include_bytes!("../../tests/fixtures/msg29-0.bin"))
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
         let events = log.0.lock().unwrap().clone();
         assert_eq!(events, ["ports", "hp stop", "ports"]);
@@ -1447,7 +1478,10 @@ mod tests {
             got.extend_from_slice(&buf[..n]);
         }
         let err = media::error_update(3, 0);
-        assert!(!got.windows(err.len()).any(|w| w == err), "sent a media error");
+        assert!(
+            !got.windows(err.len()).any(|w| w == err),
+            "sent a media error"
+        );
         drop(client);
         let _ = server.await.unwrap();
     }
@@ -1480,16 +1514,25 @@ mod tests {
         msgs.extend_from_slice(&media_config().encode());
         client.write_all(&msgs).await.unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
-        client.write_all(include_bytes!("../../tests/fixtures/msg29-0.bin")).await.unwrap();
+        client
+            .write_all(include_bytes!("../../tests/fixtures/msg29-0.bin"))
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         hp.2.store(true, std::sync::atomic::Ordering::Relaxed);
         read_for(&mut client, Duration::from_millis(100)).await;
         client.write_all(&media_config().encode()).await.unwrap();
         let got = read_for(&mut client, Duration::from_millis(300)).await;
         let err = media::error_update(2, 0);
-        let at = got.windows(err.len()).position(|w| w == err).expect("no media error");
+        let at = got
+            .windows(err.len())
+            .position(|w| w == err)
+            .expect("no media error");
         let raw = [0, 0, 0, 0, 0, 64, 0, 48, 0, 0, 0, 0];
-        assert!(got[at..].windows(raw.len()).any(|w| w == raw), "no Standard update");
+        assert!(
+            got[at..].windows(raw.len()).any(|w| w == raw),
+            "no Standard update"
+        );
         drop(client);
         let _ = server.await.unwrap();
     }

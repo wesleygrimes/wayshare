@@ -76,8 +76,22 @@ pub struct KeyboardEngine {
 
 impl KeyboardEngine {
     pub fn new(cfg: KeyboardConfig) -> Self {
-        let slots = SLOT_CODES.iter().map(|&code| Slot { code, keysym: None, used: 0 }).collect();
-        Self { cfg, pressed: HashMap::new(), refs: HashMap::new(), locked: 0, slots, clock: 0 }
+        let slots = SLOT_CODES
+            .iter()
+            .map(|&code| Slot {
+                code,
+                keysym: None,
+                used: 0,
+            })
+            .collect();
+        Self {
+            cfg,
+            pressed: HashMap::new(),
+            refs: HashMap::new(),
+            locked: 0,
+            slots,
+            clock: 0,
+        }
     }
 
     /// Actions to run once after creating the virtual keyboard.
@@ -86,8 +100,11 @@ impl KeyboardEngine {
     }
 
     pub fn keymap(&self) -> String {
-        let slots: Vec<(u32, u32)> =
-            self.slots.iter().filter_map(|s| s.keysym.map(|k| (s.code, k))).collect();
+        let slots: Vec<(u32, u32)> = self
+            .slots
+            .iter()
+            .filter_map(|s| s.keysym.map(|k| (s.code, k)))
+            .collect();
         keymap_text(&self.cfg, &slots)
     }
 
@@ -100,7 +117,11 @@ impl KeyboardEngine {
             Some(k) if kvk::modifier(k).is_some() || kvk::to_evdev(k).is_some() => KeyId::Kvk(k),
             _ => KeyId::Sym(keysym::fold(keysym)),
         };
-        if down { self.press(id, keysym) } else { self.release(id) }
+        if down {
+            self.press(id, keysym)
+        } else {
+            self.release(id)
+        }
     }
 
     pub fn release_all(&mut self) -> Vec<KbAction> {
@@ -145,7 +166,10 @@ impl KeyboardEngine {
         let have_shift = before & MOD_SHIFT != 0;
         let toggle = want_shift.is_some_and(|w| w != have_shift);
         if toggle {
-            out.push(KbAction::Modifiers { depressed: before ^ MOD_SHIFT, locked: self.locked });
+            out.push(KbAction::Modifiers {
+                depressed: before ^ MOD_SHIFT,
+                locked: self.locked,
+            });
         }
         out.push(KbAction::Key { code, down: true });
         match code {
@@ -160,7 +184,9 @@ impl KeyboardEngine {
     }
 
     fn release(&mut self, id: KeyId) -> Vec<KbAction> {
-        let Some(code) = self.pressed.remove(&id) else { return vec![] };
+        let Some(code) = self.pressed.remove(&id) else {
+            return vec![];
+        };
         let n = self.refs.entry(code).or_insert(1);
         *n -= 1;
         if *n > 0 {
@@ -175,7 +201,12 @@ impl KeyboardEngine {
     }
 
     /// evdev code plus the Shift state the keysym needs (`None` = whatever is held).
-    fn resolve(&mut self, id: KeyId, keysym: u32, out: &mut Vec<KbAction>) -> Option<(u32, Option<bool>)> {
+    fn resolve(
+        &mut self,
+        id: KeyId,
+        keysym: u32,
+        out: &mut Vec<KbAction>,
+    ) -> Option<(u32, Option<bool>)> {
         if let KeyId::Kvk(k) = id {
             if let Some(m) = kvk::modifier(k) {
                 return Some((self.modifier_code(m), None));
@@ -219,7 +250,13 @@ impl KeyboardEngine {
 
     fn modifier_code(&self, m: Modifier) -> u32 {
         let target = match m.key {
-            ModKey::Shift => return if m.right { KEY_RIGHTSHIFT } else { KEY_LEFTSHIFT },
+            ModKey::Shift => {
+                return if m.right {
+                    KEY_RIGHTSHIFT
+                } else {
+                    KEY_LEFTSHIFT
+                };
+            }
             ModKey::CapsLock => return KEY_CAPSLOCK,
             ModKey::Control => ModTarget::Ctrl,
             ModKey::Command => self.cfg.command,
@@ -261,20 +298,33 @@ impl KeyboardEngine {
     }
 
     fn mods(&self) -> KbAction {
-        KbAction::Modifiers { depressed: self.depressed(), locked: self.locked }
+        KbAction::Modifiers {
+            depressed: self.depressed(),
+            locked: self.locked,
+        }
     }
 }
 
 fn sanitize(s: &str) -> String {
-    s.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')).collect()
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+        .collect()
 }
 
 /// xkb keymap the compositor compiles against its own xkeyboard-config data.
 pub fn keymap_text(cfg: &KeyboardConfig, slots: &[(u32, u32)]) -> String {
     let layout = sanitize(&cfg.layout);
     let variant = sanitize(&cfg.variant);
-    let layout = if layout.is_empty() { "us".to_string() } else { layout };
-    let base = if variant.is_empty() { layout } else { format!("{layout}({variant})") };
+    let layout = if layout.is_empty() {
+        "us".to_string()
+    } else {
+        layout
+    };
+    let base = if variant.is_empty() {
+        layout
+    } else {
+        format!("{layout}({variant})")
+    };
     let level3 = if cfg.command == ModTarget::AltGr || cfg.option == ModTarget::AltGr {
         "+level3(ralt_switch)"
     } else {
@@ -347,8 +397,20 @@ mod tests {
     #[test]
     fn plain_letter() {
         let mut e = eng();
-        assert_eq!(e.key(true, 'a' as u32, None), vec![Key { code: KEY_A, down: true }]);
-        assert_eq!(e.key(false, 'a' as u32, None), vec![Key { code: KEY_A, down: false }]);
+        assert_eq!(
+            e.key(true, 'a' as u32, None),
+            vec![Key {
+                code: KEY_A,
+                down: true
+            }]
+        );
+        assert_eq!(
+            e.key(false, 'a' as u32, None),
+            vec![Key {
+                code: KEY_A,
+                down: false
+            }]
+        );
     }
 
     #[test]
@@ -357,9 +419,18 @@ mod tests {
         assert_eq!(
             e.key(true, '!' as u32, None),
             vec![
-                Modifiers { depressed: MOD_SHIFT, locked: 0 },
-                Key { code: KEY_1, down: true },
-                Modifiers { depressed: 0, locked: 0 },
+                Modifiers {
+                    depressed: MOD_SHIFT,
+                    locked: 0
+                },
+                Key {
+                    code: KEY_1,
+                    down: true
+                },
+                Modifiers {
+                    depressed: 0,
+                    locked: 0
+                },
             ]
         );
     }
@@ -369,12 +440,33 @@ mod tests {
         let mut e = eng();
         assert_eq!(
             e.key(true, 0xffe1, None),
-            vec![Key { code: KEY_LEFTSHIFT, down: true }, Modifiers { depressed: MOD_SHIFT, locked: 0 }]
+            vec![
+                Key {
+                    code: KEY_LEFTSHIFT,
+                    down: true
+                },
+                Modifiers {
+                    depressed: MOD_SHIFT,
+                    locked: 0
+                }
+            ]
         );
-        assert_eq!(e.key(true, 'A' as u32, None), vec![Key { code: KEY_A, down: true }]);
+        assert_eq!(
+            e.key(true, 'A' as u32, None),
+            vec![Key {
+                code: KEY_A,
+                down: true
+            }]
+        );
         // Release arrives lowercase after Shift went up first.
         e.key(false, 0xffe1, None);
-        assert_eq!(e.key(false, 'a' as u32, None), vec![Key { code: KEY_A, down: false }]);
+        assert_eq!(
+            e.key(false, 'a' as u32, None),
+            vec![Key {
+                code: KEY_A,
+                down: false
+            }]
+        );
     }
 
     #[test]
@@ -383,19 +475,31 @@ mod tests {
         assert_eq!(keys(&e.key(true, 0xffe7, None)), vec![(KEY_LEFTMETA, true)]);
         assert_eq!(keys(&e.key(true, 0xffe9, None)), vec![(KEY_LEFTALT, true)]);
         assert_eq!(e.depressed(), MOD_SUPER | MOD_ALT);
-        let mut e = KeyboardEngine::new(KeyboardConfig { command: ModTarget::Ctrl, ..Default::default() });
-        assert_eq!(keys(&e.key(true, 0x37, Some(0x37))), vec![(KEY_LEFTCTRL, true)]);
+        let mut e = KeyboardEngine::new(KeyboardConfig {
+            command: ModTarget::Ctrl,
+            ..Default::default()
+        });
+        assert_eq!(
+            keys(&e.key(true, 0x37, Some(0x37))),
+            vec![(KEY_LEFTCTRL, true)]
+        );
         assert_eq!(e.depressed(), MOD_CTRL);
     }
 
     #[test]
     fn command_and_control_share_ctrl_refcounted() {
-        let mut e = KeyboardEngine::new(KeyboardConfig { command: ModTarget::Ctrl, ..Default::default() });
+        let mut e = KeyboardEngine::new(KeyboardConfig {
+            command: ModTarget::Ctrl,
+            ..Default::default()
+        });
         assert_eq!(keys(&e.key(true, 0xffe3, None)), vec![(KEY_LEFTCTRL, true)]);
         assert_eq!(keys(&e.key(true, 0xffe7, None)), vec![]);
         assert_eq!(keys(&e.key(false, 0xffe3, None)), vec![]);
         assert_eq!(e.depressed(), MOD_CTRL);
-        assert_eq!(keys(&e.key(false, 0xffe7, None)), vec![(KEY_LEFTCTRL, false)]);
+        assert_eq!(
+            keys(&e.key(false, 0xffe7, None)),
+            vec![(KEY_LEFTCTRL, false)]
+        );
         assert_eq!(e.depressed(), 0);
     }
 
@@ -403,15 +507,24 @@ mod tests {
     fn mac_keycode_is_positional() {
         let mut e = eng();
         // kVK_ANSI_Q with whatever keysym the client's layout produced (here AZERTY 'a').
-        assert_eq!(keys(&e.key(true, 'a' as u32, Some(0x0c))), vec![(KEY_Q, true)]);
-        assert_eq!(keys(&e.key(false, 'a' as u32, Some(0x0c))), vec![(KEY_Q, false)]);
+        assert_eq!(
+            keys(&e.key(true, 'a' as u32, Some(0x0c))),
+            vec![(KEY_Q, true)]
+        );
+        assert_eq!(
+            keys(&e.key(false, 'a' as u32, Some(0x0c))),
+            vec![(KEY_Q, false)]
+        );
         assert!(e.key(true, 0, Some(kvk::KVK_FUNCTION)).is_empty());
     }
 
     #[test]
     fn unknown_mac_keycode_falls_back_to_keysym() {
         let mut e = eng();
-        assert_eq!(keys(&e.key(true, 'z' as u32, Some(0x7f))), vec![(KEY_Z, true)]);
+        assert_eq!(
+            keys(&e.key(true, 'z' as u32, Some(0x7f))),
+            vec![(KEY_Z, true)]
+        );
     }
 
     #[test]
@@ -425,11 +538,19 @@ mod tests {
     fn non_us_keysym_uses_slot_and_uploads_keymap() {
         let mut e = eng();
         let a = e.key(true, 0xe9, None);
-        assert!(matches!(&a[0], Keymap(k) if k.contains("<ARD195> = 203;") && k.contains("0x000000e9")));
+        assert!(
+            matches!(&a[0], Keymap(k) if k.contains("<ARD195> = 203;") && k.contains("0x000000e9"))
+        );
         assert_eq!(keys(&a), vec![(195, true)]);
         e.key(false, 0xe9, None);
         // Reuse without another upload.
-        assert_eq!(e.key(true, 0xe9, None), vec![Key { code: 195, down: true }]);
+        assert_eq!(
+            e.key(true, 0xe9, None),
+            vec![Key {
+                code: 195,
+                down: true
+            }]
+        );
         e.key(false, 0xe9, None);
         let a = e.key(true, 0x1000263a, None);
         assert!(matches!(&a[0], Keymap(k) if k.contains("0x1000263a") && k.contains("0x000000e9")));
@@ -451,9 +572,21 @@ mod tests {
     #[test]
     fn caps_and_num_lock_toggle_locked_mask() {
         let mut e = eng();
-        assert_eq!(e.key(true, 0xffe5, None).last(), Some(&Modifiers { depressed: 0, locked: MOD_LOCK }));
+        assert_eq!(
+            e.key(true, 0xffe5, None).last(),
+            Some(&Modifiers {
+                depressed: 0,
+                locked: MOD_LOCK
+            })
+        );
         e.key(false, 0xffe5, None);
-        assert_eq!(e.key(true, 0xff7f, None).last(), Some(&Modifiers { depressed: 0, locked: MOD_LOCK | MOD_NUM }));
+        assert_eq!(
+            e.key(true, 0xff7f, None).last(),
+            Some(&Modifiers {
+                depressed: 0,
+                locked: MOD_LOCK | MOD_NUM
+            })
+        );
     }
 
     #[test]
@@ -471,7 +604,9 @@ mod tests {
     fn non_us_layout_routes_printables_through_slots() {
         let mut e = eng();
         let a = e.set_layout("de", "mac");
-        assert!(matches!(a.iter().find(|a| matches!(a, Keymap(_))), Some(Keymap(k)) if k.contains("pc+de(mac)+inet(evdev)")));
+        assert!(
+            matches!(a.iter().find(|a| matches!(a, Keymap(_))), Some(Keymap(k)) if k.contains("pc+de(mac)+inet(evdev)"))
+        );
         assert_eq!(keys(&e.key(true, 'z' as u32, None)), vec![(195, true)]);
         assert_eq!(keys(&e.key(true, 0xff0d, None)), vec![(KEY_ENTER, true)]);
     }
@@ -481,16 +616,31 @@ mod tests {
         let k = keymap_text(&KeyboardConfig::default(), &[]);
         assert!(k.contains("include \"pc+us+inet(evdev)\""));
         assert!(k.contains("include \"evdev+aliases(qwerty)\""));
-        let altgr = KeyboardConfig { option: ModTarget::AltGr, ..Default::default() };
+        let altgr = KeyboardConfig {
+            option: ModTarget::AltGr,
+            ..Default::default()
+        };
         assert!(keymap_text(&altgr, &[]).contains("+level3(ralt_switch)"));
-        let evil = KeyboardConfig { layout: "us\"; };".into(), ..Default::default() };
+        let evil = KeyboardConfig {
+            layout: "us\"; };".into(),
+            ..Default::default()
+        };
         assert!(keymap_text(&evil, &[]).contains("pc+us+inet"));
     }
 
     #[test]
     fn input_sources() {
-        assert_eq!(layout_for_input_source("com.apple.keylayout.US"), Some(("us", "")));
-        assert_eq!(layout_for_input_source("com.apple.keylayout.German"), Some(("de", "mac")));
-        assert_eq!(layout_for_input_source("com.apple.inputmethod.Kotoeri"), None);
+        assert_eq!(
+            layout_for_input_source("com.apple.keylayout.US"),
+            Some(("us", ""))
+        );
+        assert_eq!(
+            layout_for_input_source("com.apple.keylayout.German"),
+            Some(("de", "mac"))
+        );
+        assert_eq!(
+            layout_for_input_source("com.apple.inputmethod.Kotoeri"),
+            None
+        );
     }
 }
