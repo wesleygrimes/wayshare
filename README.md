@@ -4,6 +4,10 @@ Share your Hyprland desktop with a Mac, using the Screen Sharing app it already 
 There's nothing to install on the Mac, and its High Performance mode works too, for sharp,
 low-latency video and sound.
 
+[![wayshare demo](docs/media/demo.jpg)](docs/media/demo.mp4)
+
+*Demo (40s): click to watch.*
+
 Needs Hyprland 0.56 or newer and systemd.
 
 ## Install
