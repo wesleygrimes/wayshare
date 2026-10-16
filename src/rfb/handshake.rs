@@ -598,4 +598,54 @@ pub(crate) mod tests {
             assert!(srv.await.unwrap().is_err());
         }
     }
+
+    #[tokio::test]
+    async fn srp_rejects_public_value_congruent_to_zero() {
+        let n = srp::modulus();
+        let forged = [
+            vec![],
+            vec![0],
+            n.to_bytes_be(),
+            (&n * 2u32).to_bytes_be(),
+            (&n * 3u32).to_bytes_be(),
+        ];
+        for a in forged {
+            let (mut client, mut server) = tokio::io::duplex(4096);
+            let auth = both_config();
+            let srv = tokio::spawn(async move {
+                run(
+                    &mut server,
+                    &auth,
+                    640,
+                    480,
+                    &PixelFormat::NATIVE,
+                    "test",
+                    BASE_CLIENT_MESSAGES,
+                )
+                .await
+            });
+            client.read_exact(&mut [0u8; 12]).await.unwrap();
+            client.write_all(b"RFB 003.889\n").await.unwrap();
+            client.read_exact(&mut [0u8; 3]).await.unwrap();
+            let step1 = BufWriter::default().s("").s("wes").s("").o(&[]).finish();
+            client.write_u8(SECURITY_SRP).await.unwrap();
+            client.write_u32(step1.len() as u32).await.unwrap();
+            client.write_all(&step1).await.unwrap();
+            let len = client.read_u32().await.unwrap() as usize;
+            client.read_exact(&mut vec![0u8; len]).await.unwrap();
+            let step3 = BufWriter::default()
+                .m_bytes(&a)
+                .o(&[0; 64])
+                .s("mda=SHA-512")
+                .o(&[7; 16])
+                .finish();
+            client.write_u32(step3.len() as u32).await.unwrap();
+            client.write_all(&step3).await.unwrap();
+            assert_eq!(client.read_u32().await.unwrap(), 1);
+            let Err(err) = srv.await.unwrap() else {
+                panic!("A = {a:02x?} accepted")
+            };
+            assert!(format!("{err:#}").contains("is 0 mod N"), "{err:#}");
+        }
+    }
 }
