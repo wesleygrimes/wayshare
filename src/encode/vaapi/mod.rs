@@ -925,7 +925,7 @@ impl Drop for Session {
         let dpy = self.dpy();
         // SAFETY: The collector thread was joined above, so nothing else is using these
         // objects. Every id was created by this session and is destroyed once, invalid ids are
-        // skipped, and the array pointers are passed with their real lengths. The display is
+        // skipped, and each array pointer is passed with its real length. The display is
         // dropped last (field order).
         unsafe {
             for (_, mut s) in self.imports.drain(..) {
@@ -941,8 +941,16 @@ impl Drop for Session {
                     va().vaDestroyContext(dpy, ctx);
                 }
             }
-            va().vaDestroySurfaces(dpy, self.inputs.as_mut_ptr(), self.inputs.len() as c_int);
-            va().vaDestroySurfaces(dpy, self.recon.as_mut_ptr(), RECON_SURFACES as c_int);
+            let mut surfaces: Vec<VASurfaceID> = self
+                .inputs
+                .iter()
+                .chain(&self.recon)
+                .copied()
+                .filter(|&s| s != VA_INVALID_SURFACE)
+                .collect();
+            if !surfaces.is_empty() {
+                va().vaDestroySurfaces(dpy, surfaces.as_mut_ptr(), surfaces.len() as c_int);
+            }
             for cfg in [self.enc_config, self.vpp_config] {
                 if cfg != VA_INVALID_ID {
                     va().vaDestroyConfig(dpy, cfg);

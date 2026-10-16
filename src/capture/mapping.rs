@@ -14,8 +14,10 @@ pub(super) struct Mapping {
 // SAFETY: The mapping is read-only and unmapped only in `Drop`, so moving it to another thread
 // cannot invalidate it.
 unsafe impl Send for Mapping {}
-// SAFETY: Only shared, read-only slices are handed out, and `ReadGuard` brackets CPU reads with
-// DMA_BUF_IOCTL_SYNC so concurrent GPU writes are synchronised.
+// SAFETY: Only shared, read-only slices are handed out. A buffer is read only after its capture
+// has completed, and `State::take_buffer()` reuses it only once its `Arc` count is one, so
+// nothing writes it while a slice is live. `ReadGuard`'s DMA_BUF_IOCTL_SYNC only keeps CPU
+// caches coherent.
 unsafe impl Sync for Mapping {}
 
 impl Mapping {
