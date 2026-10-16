@@ -1,5 +1,0 @@
-paths:
-  .github/workflows/release.yml:
-    ignore:
-      # Remove with the release.yml rewrite; `sha256sum *.tar.gz` is safe inside dist/.
-      - 'SC2035:info:1:23:'

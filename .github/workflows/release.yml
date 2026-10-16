@@ -3,20 +3,56 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to rebuild into its draft release, such as v0.1.0
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+      public: ${{ steps.resolve.outputs.public }}
     steps:
-      - uses: actions/checkout@v7
-      - name: Check Cargo.toml and CHANGELOG.md
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve the tag and check the release inputs
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          version=${GITHUB_REF_NAME#v}
-          grep -qx "version = \"$version\"" Cargo.toml || { echo "::error::Cargo.toml isn't at $version"; exit 1; }
-          grep -q "^## $version " CHANGELOG.md || { echo "::error::CHANGELOG.md has no $version section"; exit 1; }
+          [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::$TAG isn't a vMAJOR.MINOR.PATCH tag"; exit 1; }
+          version=${TAG#v}
+          sha=$(git rev-parse --verify "refs/tags/$TAG^{commit}") || { echo "::error::tag $TAG doesn't exist"; exit 1; }
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$sha" != "$GITHUB_SHA" ]; then
+            echo "::error::$TAG resolves to $sha, not the pushed $GITHUB_SHA"; exit 1
+          fi
+          if gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null | grep -qx false; then
+            echo "::error::$TAG is already published; this workflow never touches published releases"; exit 1
+          fi
+          git show "$sha:Cargo.toml" | grep -qx "version = \"$version\"" || { echo "::error::Cargo.toml isn't at $version in $TAG"; exit 1; }
+          git show "$sha:CHANGELOG.md" | grep -q "^## $version " || { echo "::error::CHANGELOG.md has no $version section in $TAG"; exit 1; }
+          {
+            echo "tag=$TAG"
+            echo "sha=$sha"
+            echo "prerelease=$([[ $version == *-* ]] && echo true || echo false)"
+            echo "public=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private | not')"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     needs: check
@@ -33,7 +69,10 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl-dev libgbm-dev
       - run: rustup toolchain install
       - run: cargo test --locked
@@ -44,30 +83,39 @@ jobs:
           mkdir "$name"
           cp target/release/wayshare LICENSE README.md contrib/config.example.toml "$name"
           tar -czf "$name.tar.gz" "$name"
-      - uses: actions/attest-build-provenance@v4
-        if: ${{ !github.event.repository.private }}
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        if: needs.check.outputs.public == 'true'
         with:
           subject-path: wayshare-${{ matrix.target }}.tar.gz
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.target }}
           path: wayshare-${{ matrix.target }}.tar.gz
 
   release:
-    needs: build
+    needs: [check, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.check.outputs.tag }}
+      PUBLIC: ${{ needs.check.outputs.public }}
+      PRERELEASE: ${{ needs.check.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true
       - name: Write checksums and notes
         run: |
-          (cd dist && sha256sum *.tar.gz > sha256sums.txt)
-          version=${GITHUB_REF_NAME#v}
+          (cd dist && sha256sum -- *.tar.gz > sha256sums.txt)
+          version=${TAG#v}
           awk -v v="$version" '/^## / { on = index($0, "## " v " ") == 1; next } on' CHANGELOG.md > notes.md
           cat >> notes.md <<EOF
 
@@ -84,13 +132,33 @@ jobs:
 
           ## Verify
 
-          Checksums are in \`sha256sums.txt\`. Each archive also has a build attestation:
+          Checksums are in \`sha256sums.txt\`.
+          EOF
+          if [ "$PUBLIC" = true ]; then
+            cat >> notes.md <<EOF
+          Each archive also has a build attestation:
 
           \`\`\`sh
           gh attestation verify wayshare-x86_64-unknown-linux-gnu.tar.gz -R $GITHUB_REPOSITORY
           \`\`\`
           EOF
-      - name: Create draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md dist/*
+          fi
+      - name: Verify attestations
+        if: env.PUBLIC == 'true'
+        run: |
+          for archive in dist/*.tar.gz; do
+            gh attestation verify "$archive" -R "$GITHUB_REPOSITORY"
+          done
+      - name: Create or update the draft release
+        run: |
+          state=$(gh release view "$TAG" --json isDraft --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null || echo none)
+          case $state in
+            published)
+              echo "::error::$TAG is already published; this workflow never touches published releases"; exit 1 ;;
+            draft)
+              gh release upload "$TAG" dist/* --clobber
+              gh release edit "$TAG" --title "$TAG" --notes-file notes.md --prerelease="$PRERELEASE" ;;
+            none)
+              gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md \
+                ${PRERELEASE:+--prerelease="$PRERELEASE"} dist/* ;;
+          esac
