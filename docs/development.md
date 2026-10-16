@@ -45,5 +45,6 @@ than editing it.
 
 ## Style
 
-Please don't run `cargo fmt` over the crate; it reflows every file. Match the formatting
-around your change.
+Code is formatted with rustfmt (default config). Run `cargo fmt` before committing;
+`cargo fmt --check` verifies. The generated `src/encode/vaapi/sys.rs` is excluded; regenerate
+it rather than formatting it.
