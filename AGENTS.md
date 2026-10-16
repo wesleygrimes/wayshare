@@ -1,6 +1,6 @@
 # Working agreements
 
-Rules for anyone, human or agent, changing wayshare. Setup, checks, and live tests are in
+Rules for anyone, human or agent, changing wayshare. Setup and build instructions are in
 [docs/development.md](docs/development.md). The release process will be in `docs/releasing.md`.
 
 ## How to work
@@ -29,10 +29,10 @@ messages, issue text, and release notes.
 - PR descriptions state what changed, why, and how it was verified. Scale the detail to
   the change.
 - Release notes explain what users will notice and any upgrade action.
-- Remove hype, filler, canned summaries, tool branding, and inflated claims. Never invent
+- Cut hype, filler, canned summaries, and tool branding. Never invent
   test results, performance gains, or compatibility claims.
-- Review generated text as carefully as code. A passing linter cannot tell you whether
-  writing is useful.
+- Review generated text as carefully as code. A linter can't tell you whether writing is
+  useful.
 
 ## Required `$unslop` review
 

@@ -20,6 +20,7 @@ is granted deliberately, not by having a past commit.
   `style`, `revert`. Add a scope only when it clarifies the change.
 - Mark breaking changes with `!` or a `BREAKING CHANGE:` footer, and say who is affected
   and what they need to do.
+- Below 1.0, the maintainer picks each release version explicitly.
 
 ```text
 fix(clipboard): preserve copied images when reconnecting
@@ -28,12 +29,13 @@ docs: explain which firewall ports to open
 ```
 
 PRs are squash-merged and the PR title becomes the commit message, so write the title
-for the changelog reader.
+for the changelog reader. For a breaking change, keep the `BREAKING CHANGE:` footer and
+upgrade steps in the squash commit body.
 
 ## Setup and checks
 
-Build and test with `mise run build` and `mise run test`. Other checks and the live
-Hyprland test are in [docs/development.md](docs/development.md).
+Build and test with `mise run build` and `mise run test`. Prerequisites are in
+[docs/development.md](docs/development.md).
 
 ## Review
 

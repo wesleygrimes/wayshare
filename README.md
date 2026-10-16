@@ -85,7 +85,7 @@ stay in your config directory (usually `~/.config/wayshare`) until you delete it
 
 ## Support
 
-wayshare is free. If it is useful to you, you can [sponsor the work](https://github.com/sponsors/wesleygrimes) or [buy me a coffee](https://buymeacoffee.com/ncfrontiersman).
+wayshare is free. If it's useful, you can [sponsor the work](https://github.com/sponsors/wesleygrimes) or [buy me a coffee](https://buymeacoffee.com/ncfrontiersman).
 
 ## License
 
