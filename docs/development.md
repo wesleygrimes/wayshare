@@ -29,14 +29,27 @@ upgrade, run both again, then `systemctl --user restart wayshare`.
 
 ## mise
 
-[mise](https://mise.jdx.dev) is optional. It reads the toolchain pin from
-`rust-toolchain.toml` and installs `bindgen-cli`. Tasks:
+[mise](https://mise.jdx.dev) is optional for building, but CI runs these same tasks. It reads the toolchain pin from `rust-toolchain.toml` and pins
+ShellCheck, actionlint, cargo-deny, cocogitto and `bindgen-cli`. Run `mise run setup` once
+to install them and list any missing Linux system packages. It never uses sudo.
 
 | Task | Does |
 |---|---|
-| `mise run build` | release build |
-| `mise run test` | `cargo test` |
+| `mise run setup` | install tools and Rust components, report missing system packages |
+| `mise run fmt` | format with rustfmt |
+| `mise run fmt:check` | check formatting |
+| `mise run lint` | clippy (warnings fail), ShellCheck, actionlint |
+| `mise run test` | `cargo test --locked` |
+| `mise run check` | `fmt:check`, `lint` and `test`; rewrites nothing |
+| `mise run check:commits <base>` | check that commits in `<base>..HEAD` are Conventional Commits |
+| `mise run build` | dev build; add `--release` for the optimized, locked build |
+| `mise run audit` | cargo-deny: advisories, licenses, sources |
 | `mise run gen-vaapi-sys` | regenerate the libva bindings (Linux) |
+
+`mise run build` used to build the release profile. Use `mise run build --release` for that.
+
+`audit` downloads the advisory database, so it needs network. `gen-vaapi-sys` needs libva
+headers and clang.  Nothing here needs a live Hyprland session.
 
 ## Bindings
 

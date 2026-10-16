@@ -34,7 +34,7 @@ upgrade steps in the squash commit body.
 
 ## Setup and checks
 
-Build and test with `mise run build` and `mise run test`. Prerequisites are in
+Run `mise run check` before pushing. Setup, prerequisites, and the other tasks are in
 [docs/development.md](docs/development.md).
 
 ## Review
