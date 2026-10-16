@@ -7,6 +7,7 @@ shellcheck = "0.11.0"
 actionlint = "1.7.12"
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2"
 "aqua:cocogitto/cocogitto" = "7.0.0"
+"aqua:orhun/git-cliff" = "2.14.2"
 
 [tasks.setup]
 description = "Install managed tools and Rust components, report missing system packages"
@@ -59,6 +60,23 @@ run = 'cargo build --locked ${usage_release:+--release}'
 [tasks.audit]
 description = "Check dependency advisories, licenses and sources (needs network)"
 run = "cargo deny --locked check"
+
+[tasks.changelog]
+description = "Preview the unreleased release notes on stdout; writes nothing"
+run = "tools/release.sh changelog"
+
+[tasks.release]
+description = "Prepare a release (version bump and changelog section), or tag it with --tag"
+usage = '''
+arg "<version>" help="Semver version without the v, e.g. 0.2.0"
+flag "--dry-run" help="Run the checks and print the plan; write nothing"
+flag "--tag" help="Tag and push v<version> from an up-to-date main (asks first)"
+'''
+run = '''
+mode=prepare
+[ "${usage_tag:-false}" = true ] && mode=tag
+tools/release.sh "$mode" "$usage_version" "${usage_dry_run:-false}"
+'''
 
 [tasks.gen-vaapi-sys]
 description = "Regenerate the libva bindings (Linux, needs libva headers and clang)"
