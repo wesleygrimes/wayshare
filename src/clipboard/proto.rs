@@ -149,4 +149,21 @@ mod tests {
         );
         assert!(decode_viewer_send(0, (MAX_UNCOMPRESSED + 1) as u32, &z).is_err());
     }
+
+    #[test]
+    fn viewer_send_rejects_bad_payloads() {
+        let packed = pack(&[vec![Flavor::default()]]);
+        let z = compress(&packed);
+        let len = packed.len() as u32;
+        assert!(decode_viewer_send(0, len, &z).is_ok());
+        assert!(decode_viewer_send(0, len + 1, &z).is_err());
+        assert!(decode_viewer_send(0, len - 1, &z).is_err());
+        assert!(decode_viewer_send(0, u32::MAX, &z).is_err());
+        assert!(decode_viewer_send(0, len, b"not zlib at all").is_err());
+        assert!(decode_viewer_send(0, len, &[]).is_err());
+        assert_eq!(
+            decode_viewer_send(1, 0, &[]).unwrap(),
+            ViewerPasteboard::Promises(vec![])
+        );
+    }
 }

@@ -212,6 +212,27 @@ mod tests {
     }
 
     #[test]
+    fn unpack_enforces_count_caps() {
+        let mut flavors = 1025u32.to_be_bytes().to_vec();
+        assert!(unpack(&flavors).is_err());
+        flavors.clear();
+        flavors.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let mut tags = flavors.clone();
+        tags.extend_from_slice(&65u32.to_be_bytes());
+        let err = unpack(&tags).unwrap_err().to_string();
+        assert!(err.contains("65 tags"), "{err}");
+    }
+
+    #[test]
+    fn unpack_rejects_huge_field_length() {
+        let mut p = vec![0, 0, 0, 1];
+        p.extend_from_slice(&u32::MAX.to_be_bytes());
+        p.extend_from_slice(&[1, 2, 3]);
+        let err = unpack(&p).unwrap_err().to_string();
+        assert!(err.contains("overruns buffer"), "{err}");
+    }
+
+    #[test]
     fn zlib_sync_flush_round_trip() {
         let data: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
         let z = compress(&data);
