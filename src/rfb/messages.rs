@@ -357,6 +357,7 @@ impl EventBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     async fn parse(bytes: &[u8]) -> (ClientMessage, usize) {
         let mut r = bytes;
@@ -481,6 +482,59 @@ mod tests {
         let (m, n) = parse(&[28, 0, 0, 2, 0, 3, 0xaa]).await;
         assert!(matches!(m, ClientMessage::MediaStreamConfig(ref b) if b == &[28, 0, 0, 2, 0, 3]));
         assert_eq!(n, 6);
+    }
+
+    async fn read_err(bytes: &[u8]) -> String {
+        let mut r = bytes;
+        read(&mut r).await.unwrap_err().to_string()
+    }
+
+    #[tokio::test]
+    async fn oversized_lengths_are_rejected() {
+        let cut_text = [6, 0, 0, 0, 0x01, 0x00, 0x00, 0x01];
+        assert!(read_err(&cut_text).await.contains("too large"));
+        let event2 = [23, 0, 0xc3, 0x51];
+        assert!(read_err(&event2).await.contains("too large"));
+        let mut clip = vec![31];
+        clip.extend_from_slice(&[0; 11]);
+        clip.extend_from_slice(&[0x01, 0x00, 0x00, 0x01]);
+        assert!(read_err(&clip).await.contains("too large"));
+        let skip = [34, 0, 0x06, 0x40, 0x00, 0x01];
+        assert!(read_err(&skip).await.contains("refusing to skip"));
+    }
+
+    #[tokio::test]
+    async fn truncated_variable_messages_error() {
+        let mut viewer_info = vec![33, 0, 0, 0x3e];
+        viewer_info.extend_from_slice(&[0; 0x3e]);
+        let mut display = vec![29, 0, 0, 0xc0];
+        display.extend_from_slice(&[0; 0xc0]);
+        let mut clip_send = vec![31, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 3, 0, 0, 0, 2];
+        clip_send.extend_from_slice(&[7, 8]);
+        let messages: [&[u8]; 11] = [
+            &[2, 0, 0, 2, 0, 0, 0, 6, 0xff, 0xff, 0xff, 0x21],
+            &[6, 0, 0, 0, 0, 0, 0, 2, b'h', b'i'],
+            &[18, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+            &[23, 0, 0, 2, 1, 2],
+            &[26, 0, 0, 2, 1, 2],
+            &[28, 0, 0, 2, 0, 3],
+            &[25, 0, 0, 3, 1, 2, 3],
+            &[12, 0, 0, 0, 0, 2, 1, 2],
+            &viewer_info,
+            &display,
+            &clip_send,
+        ];
+        for msg in messages {
+            for cut in 1..msg.len() {
+                let mut r = &msg[..cut];
+                let res = tokio::time::timeout(Duration::from_secs(5), read(&mut r)).await;
+                assert!(
+                    res.expect("read hung").is_err(),
+                    "kind {} cut at {cut} did not error",
+                    msg[0]
+                );
+            }
+        }
     }
 
     #[tokio::test]
