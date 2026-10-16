@@ -1,0 +1,64 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: input
+    id: wayshare-version
+    attributes:
+      label: wayshare version
+      description: Output of `wayshare --version`.
+    validations:
+      required: true
+  - type: input
+    id: hyprland-version
+    attributes:
+      label: Hyprland version
+      description: Output of `hyprctl version`.
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      description: For example, AMD Radeon RX 7600 with Mesa 25.1.
+  - type: input
+    id: encoding
+    attributes:
+      label: Encoding mode
+      description: Standard, High Performance, VA-API, or x265, if you know.
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - curl installer
+        - mise
+        - cargo install from source
+        - distro package
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output of `journalctl --user -u wayshare`. Remove passwords, hostnames, and IP addresses.
+      render: text

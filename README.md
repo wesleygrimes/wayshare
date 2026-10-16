@@ -83,6 +83,10 @@ stay in your config directory (usually `~/.config/wayshare`) until you delete it
 - [Packaging](docs/packaging.md): install layout and dependencies, for distro packagers
 - [Development](docs/development.md): building, tests, live checks
 
+## Support
+
+wayshare is free. If it is useful to you, you can [sponsor the work](https://github.com/sponsors/wesleygrimes) or [buy me a coffee](https://buymeacoffee.com/ncfrontiersman).
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
