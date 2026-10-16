@@ -25,7 +25,8 @@ body = """
 {% endfor %}\
 {% endfor %}\
 {% set authors = commits | map(attribute="author.name") | unique %}\
-{% if authors | length > 1 %}
+{% set emails = commits | map(attribute="author.email") | unique %}\
+{% if emails | length > 1 %}
 Thanks to {{ authors | join(sep=", ") }}.
 {% endif %}\
 {% if previous.version %}
