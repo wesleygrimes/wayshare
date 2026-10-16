@@ -1,8 +1,11 @@
 # wayshare
 
 Share your Hyprland desktop with a Mac, using the Screen Sharing app it already has.
-There's nothing to install on the Mac, and its High Performance mode works too, for sharp,
-low-latency video and sound.
+wayshare speaks Apple's Screen Sharing protocol, so there's nothing to install on the Mac.
+
+- The Mac's ⌘ key sends Super, so your Hyprland and Omarchy shortcuts work as usual.
+- Copy and paste text, rich text and images in both directions.
+- Screen Sharing's High Performance mode works, for sharp, low-latency video and sound.
 
 [![wayshare demo](docs/media/demo.jpg)](docs/media/demo.mp4)
 
