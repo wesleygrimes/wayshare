@@ -1,7 +1,7 @@
 # Working agreements
 
 Rules for anyone, human or agent, changing wayshare. Setup and build instructions are in
-[docs/development.md](docs/development.md). The release process will be in `docs/releasing.md`.
+[docs/development.md](docs/development.md). The release process is in [docs/releasing.md](docs/releasing.md).
 
 ## How to work
 

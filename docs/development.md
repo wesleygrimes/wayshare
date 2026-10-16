@@ -31,7 +31,7 @@ upgrade, run both again, then `systemctl --user restart wayshare`.
 
 [mise](https://mise.jdx.dev) is optional, but CI runs these same tasks. It reads the
 toolchain pin from `rust-toolchain.toml` and pins ShellCheck, actionlint, cargo-deny,
-cocogitto and `bindgen-cli`. Run `mise run setup` once to install them. Setup lists any
+cocogitto, git-cliff and `bindgen-cli`. Run `mise run setup` once to install them. Setup lists any
 missing Linux system packages but never uses sudo.
 
 | Task | Does |
@@ -45,6 +45,8 @@ missing Linux system packages but never uses sudo.
 | `mise run check:commits <base>` | check that commits in `<base>..HEAD` are Conventional Commits |
 | `mise run build` | dev build; add `--release` for the optimized, locked build |
 | `mise run audit` | cargo-deny: advisories, licenses, sources |
+| `mise run changelog` | preview unreleased release notes on stdout; writes nothing |
+| `mise run release <version> [--dry-run] [--tag]` | prepare a release PR, or tag it; see [releasing.md](releasing.md) |
 | `mise run gen-vaapi-sys` | regenerate the libva bindings (Linux) |
 
 `mise run build` is now a dev build; pass `--release` for an optimized build.
