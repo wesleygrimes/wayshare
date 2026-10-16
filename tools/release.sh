@@ -16,19 +16,16 @@ cargo_version() {
   sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1
 }
 
-# Closest release tag before HEAD. A final release skips prereleases, so its notes cover
-# everything since the last final release.
+# Closest release tag before HEAD.
 base_tag() {
-  local exclude=()
-  [[ ${1:-} == *-* ]] || exclude=(--exclude '*-*')
-  git describe --tags --abbrev=0 --match 'v[0-9]*' ${exclude[@]+"${exclude[@]}"} HEAD 2>/dev/null ||
+  git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD 2>/dev/null ||
     die "no release tag found. The first release's CHANGELOG.md section is written by hand."
 }
 
 # Notes for the commits after the base tag. Pass a version to render a release section.
 notes() {
   local version=${1:-} base args=()
-  base=$(base_tag "$version")
+  base=$(base_tag)
   local bad
   bad=$(git log --format='%h %s' "$base..HEAD" | grep -Ev '^[0-9a-f]+ [a-z]+(\([^)]+\))?!?: ' || true)
   if [[ -n $bad ]]; then
@@ -39,38 +36,24 @@ notes() {
   RUST_LOG=error git-cliff --config cliff.toml ${args[@]+"${args[@]}"} "$base..HEAD"
 }
 
-# Succeeds when $1 > $2 under semver precedence.
+# X.Y.Z with no leading zeros and at most nine digits per part, so bash arithmetic can't overflow.
+VERSION_RE='^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$'
+
+# Succeeds when $1 > $2.
 semver_gt() {
-  local re='^([0-9]+)\.([0-9]+)\.([0-9]+)(-([0-9A-Za-z.-]+))?$'
-  [[ $1 =~ $re ]] || return 1
-  local a=("${BASH_REMATCH[@]:1:3}") apre=${BASH_REMATCH[5]}
-  [[ $2 =~ $re ]] || return 1
-  local b=("${BASH_REMATCH[@]:1:3}") bpre=${BASH_REMATCH[5]} i
+  [[ $1 =~ $VERSION_RE ]] || return 1
+  local a=("${BASH_REMATCH[@]:1:3}") i
+  [[ $2 =~ $VERSION_RE ]] || return 1
+  local b=("${BASH_REMATCH[@]:1:3}")
   for i in 0 1 2; do
     ((a[i] > b[i])) && return 0
     ((a[i] < b[i])) && return 1
   done
-  [[ $apre == "$bpre" ]] && return 1
-  [[ -z $apre ]] && return 0
-  [[ -z $bpre ]] && return 1
-  local x y
-  IFS=. read -ra x <<<"$apre"
-  IFS=. read -ra y <<<"$bpre"
-  for ((i = 0; i < ${#x[@]} && i < ${#y[@]}; i++)); do
-    [[ ${x[i]} == "${y[i]}" ]] && continue
-    if [[ ${x[i]} =~ ^[0-9]+$ && ${y[i]} =~ ^[0-9]+$ ]]; then
-      ((x[i] > y[i])) && return 0 || return 1
-    fi
-    [[ ${x[i]} =~ ^[0-9]+$ ]] && return 1
-    [[ ${y[i]} =~ ^[0-9]+$ ]] && return 0
-    [[ ${x[i]} > ${y[i]} ]] && return 0 || return 1
-  done
-  ((${#x[@]} > ${#y[@]}))
+  return 1
 }
 
 check_version() {
-  local re='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
-  [[ ${1:-} =~ $re ]] || die "'${1:-}' isn't a semver version like 0.2.0 or 0.2.0-rc.1"
+  [[ ${1:-} =~ $VERSION_RE ]] || die "'${1:-}' isn't a version like 0.2.0 (X.Y.Z, no leading zeros, no prerelease part)"
 }
 
 changelog_has() {
