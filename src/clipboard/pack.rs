@@ -214,7 +214,8 @@ mod tests {
     #[test]
     fn unpack_enforces_count_caps() {
         let mut flavors = 1025u32.to_be_bytes().to_vec();
-        assert!(unpack(&flavors).is_err());
+        let err = unpack(&flavors).unwrap_err().to_string();
+        assert!(err.contains("1025 flavors"), "{err}");
         flavors.clear();
         flavors.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
         let mut tags = flavors.clone();
