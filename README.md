@@ -9,9 +9,11 @@ wayshare speaks Apple's Screen Sharing protocol, so there's nothing to install o
 
 ![An Omarchy desktop shared to a Mac with Screen Sharing](docs/media/screenshot.jpg)
 
-[Watch the 40-second demo](docs/media/demo.mp4).
-
 Needs Hyprland 0.56 or newer and systemd.
+
+## Demo
+
+https://github.com/user-attachments/assets/b43a3ae0-370d-4816-958b-87a16504bd8a
 
 ## Install
 
