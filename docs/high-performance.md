@@ -6,7 +6,11 @@ regular Standard mode.
 
 ## Connecting
 
-Open this from the Mac, with your machine's address:
+In the Screen Sharing app, connect to your machine's address and choose **High Performance**
+when it asks for a connection type. You can also switch it for an open connection from the
+toolbar.
+
+To open it directly instead, enter this in Finder's **Go > Connect to Server**:
 
 ```
 vnc://192.168.1.20?quality=high&numVirtualDisplays=1

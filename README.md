@@ -55,9 +55,12 @@ wayshare isn't on the AUR or in `omarchy pkg` yet. Those packages are coming soo
    On Omarchy that's all. Elsewhere, if wayshare doesn't come back after you log in again,
    add [one line to `hyprland.conf`](docs/troubleshooting.md#the-service-doesnt-start-at-login).
 
-4. On the Mac, open Finder, choose **Go > Connect to Server** and enter `vnc://` followed
-   by the Linux machine's address, like `vnc://192.168.1.20`. It also shows up in Finder's
-   sidebar under **Network**.
+4. On the Mac, open the **Screen Sharing** app (search for it with Spotlight), choose
+   **Connection > New** and enter the Linux machine's address, like `192.168.1.20`. Sign in
+   with the password from step 1. To get sharper, low-latency video and sound, pick
+   **High Performance** when it asks (see [High Performance mode](docs/high-performance.md)).
+
+   The machine also shows up in Finder's sidebar under **Network**.
 
 Connection trouble? See [Troubleshooting](docs/troubleshooting.md).
 
