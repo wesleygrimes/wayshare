@@ -332,6 +332,11 @@ impl Session {
     }
 
     fn encode_pic(&mut self, p: TilePic) -> Result<EncodedTile> {
+        if self.enc.is_null() || self.pic.is_null() {
+            bail!("x265 encoder is not open");
+        }
+        // SAFETY: `self.enc` and `self.pic` are non-null (checked above) and stay valid until
+        // `close`.
         unsafe {
             let pic = self.pic;
             (pic.add(PIC_PTS) as *mut i64).write(self.pts);
@@ -376,8 +381,9 @@ impl Session {
 impl Backend for Session {
     /// Encodes synchronously; `receive` hands the results back in order.
     fn submit(&mut self, frame: &Frame, pics: &[TilePic], mut meta: EncodedFrame) -> Result<()> {
-        if std::mem::take(&mut self.reopen) {
+        if self.reopen {
             self.open()?;
+            self.reopen = false;
         }
         let t0 = std::time::Instant::now();
         self.convert(frame, pics)?;
