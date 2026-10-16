@@ -74,6 +74,10 @@ incremental; release builds are not.
 | VM | edit `src/server_linux.rs` | `mise run build` | 1.7 s |
 | VM | cold release | `mise run build --release` | 30.7 s |
 
+wayshare stays one package. Small edits already rebuild in under 2 s, and Linux-only
+dependencies only compile on Linux, so a workspace split would save little time and would
+make many internal items `pub`.
+
 ## Bindings
 
 `src/encode/vaapi/sys.rs` is generated. Regenerate it with `tools/gen-vaapi-sys.sh` rather
