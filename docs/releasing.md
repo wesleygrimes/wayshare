@@ -6,14 +6,15 @@ draft.
 
 ## The first-release boundary
 
-v0.1.0 is the first release. Its `CHANGELOG.md` section is handwritten and stays as it is.
-The commits before it aren't Conventional Commits and are never parsed.
+v0.1.0 is the changelog boundary. Its `CHANGELOG.md` section is handwritten and stays as it
+is. The commits before it aren't Conventional Commits and are never parsed. The v0.1.0
+draft stays unpublished because its tag predates binary stripping; v0.1.1 is the first
+public release.
 
-Generation reads only `<latest release tag>..HEAD`. A final release skips prerelease tags
-when picking that base. With no `v*` tag reachable, the tooling stops and tells you to
-write the section by hand, so it can't fall back to parsing the old history. Commits in
-the range that aren't Conventional Commits are listed as a warning and land under
-Maintenance.
+Generation reads only `<latest release tag>..HEAD`. With no `v*` tag reachable, the
+tooling stops and tells you to write the section by hand, so it can't fall back to parsing
+the old history. Commits in the range that aren't Conventional Commits are listed as a
+warning and land under Maintenance.
 
 ## Sections
 
@@ -29,8 +30,8 @@ upgrade instruction.
    every check and prints the changes without writing.
 2. Run `mise run release X.Y.Z`. It bumps `Cargo.toml` and `Cargo.lock` and prepends the
    generated section to `CHANGELOG.md`. It refuses if the section already exists, so
-   reviewed wording is never overwritten. Fix the date if you need to; it's the UTC date of
-   preparation.
+   reviewed wording is never overwritten. The date is the UTC date of preparation; edit it if
+   needed.
 3. Review the section for correctness and omissions, add upgrade notes, and run `$unslop`
    on it ([AGENTS.md](../AGENTS.md) has the writing rule). Commit as
    `chore(release): X.Y.Z` and open the PR.
@@ -51,20 +52,14 @@ When the repository is public, the build attests each archive, a failed attestat
 the run, and the release job verifies every archive before touching the draft. The notes
 mention attestations only in that case. On a private repository the build skips them.
 
-## Prereleases
-
-A version with a semver prerelease part (`0.3.0-rc.1`) becomes a GitHub prerelease. GitHub's
-`latest` URL skips prereleases and drafts, so `install.sh` won't pick one up. Install it
-with `WAYSHARE_VERSION=v0.3.0-rc.1`.
-
 ## Recovering a failed run
 
-Run the Release workflow from `main` with the `tag` input set to the existing tag. It
-resolves that tag's commit, builds exactly that commit, then creates the draft or updates
-the existing draft's assets (`--clobber`) and notes. It refuses a published release and
-never creates, moves or deletes a tag. Workflow reruns reuse the original event, so use
-this path instead, for example to rebuild v0.1.0 with attestations after the repository
-goes public.
+Run the Release workflow on the tag itself: `gh workflow run release.yml --ref vX.Y.Z`,
+using a tag that contains this workflow, such as v0.1.1. The run builds that tag's commit,
+and the attestations record the tag's SHA and ref. It fails unless the ref is a `vX.Y.Z`
+tag. It then creates the draft or updates the existing draft's assets (`--clobber`) and
+notes. It refuses a published release and never creates, moves or deletes a tag. Workflow
+reruns reuse the original event, so they can't pick up changes.
 
 ## Published tags
 
