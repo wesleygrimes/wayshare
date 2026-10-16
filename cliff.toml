@@ -1,6 +1,5 @@
 # Release notes for wayshare. Run through `mise run changelog` and `mise run release`.
-# Only commits after the latest v* tag are read, so the handwritten history before it is
-# never parsed. See docs/releasing.md.
+# Only commits after the latest v* tag are read. See docs/releasing.md.
 
 [changelog]
 header = ""
@@ -19,7 +18,9 @@ body = """
 - {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | split(pat="\n") | first | trim }}\
 {% if not commit.message is containing("(#") %} ([{{ commit.id | truncate(length=7, end="") }}]($REPO/commit/{{ commit.id }})){% endif %}
 {% if commit.breaking and commit.breaking_description != commit.message %}\
-{{ "  " }}{{ commit.breaking_description | trim | replace(from="\n", to="\n  ") }}
+{% for line in commit.breaking_description | trim | split(pat="\n") %}\
+{% if line | trim %}  {{ line | trim_end }}{% endif %}
+{% endfor %}\
 {% endif %}\
 {% endfor %}\
 {% endfor %}\
@@ -45,8 +46,8 @@ sort_commits = "oldest"
 tag_pattern = '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 # Group names carry a sort prefix; group_by orders by name and the heading strips it.
 commit_parsers = [
-  { message = '^chore\(release\)', skip = true },
   { field = "breaking", pattern = "true", group = "<!-- 0 -->Breaking changes" },
+  { message = '^chore\(release\)', skip = true },
   { message = '^[a-z]+\(security\)', group = "<!-- 2 -->Fixes" },
   { message = '^(feat|fix|build|chore|ci)\(deps', group = "<!-- 6 -->Maintenance" },
   { message = '^feat', group = "<!-- 1 -->Features" },
