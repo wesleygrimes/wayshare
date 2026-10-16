@@ -3,16 +3,57 @@ idiomatic_version_file_enable_tools = ["rust"]
 
 [tools]
 "cargo:bindgen-cli" = "0.73.2"
+shellcheck = "0.11.0"
+actionlint = "1.7.12"
+"aqua:EmbarkStudios/cargo-deny" = "0.20.2"
+"aqua:cocogitto/cocogitto" = "7.0.0"
 
-[tasks.build]
-description = "Build the release binary"
-run = "cargo build --release"
+[tasks.setup]
+description = "Install managed tools and Rust components, report missing system packages"
+run = [
+  "mise install",
+  "rustup component add rustfmt clippy",
+  "tools/check-system-deps.sh",
+]
+
+[tasks.fmt]
+description = "Format Rust sources"
+run = "cargo fmt"
+
+[tasks."fmt:check"]
+description = "Check Rust formatting without changing files"
+run = "cargo fmt --check"
+
+[tasks.lint]
+description = "Run clippy, ShellCheck and actionlint"
+run = [
+  "cargo clippy --locked --all-targets -- -D warnings",
+  "shellcheck install.sh tools/*.sh",
+  "actionlint",
+]
 
 [tasks.test]
 description = "Run the test suite"
-run = "cargo test"
+run = "cargo test --locked"
+
+[tasks.check]
+description = "Check formatting, lint and tests without rewriting files"
+depends = ["fmt:check", "lint", "test"]
+
+[tasks."check:commits"]
+description = "Validate commit messages in <base>..HEAD"
+usage = 'arg "<base>" help="Git revision to start after, e.g. origin/main"'
+run = 'cog check "${usage_base}..HEAD"'
+
+[tasks.build]
+description = "Build the dev profile, or the optimized binary with --release"
+usage = 'flag "--release" help="Build the release profile"'
+run = 'cargo build --locked ${usage_release:+--release}'
+
+[tasks.audit]
+description = "Check dependency advisories, licenses and sources (needs network)"
+run = "cargo deny --locked check"
 
 [tasks.gen-vaapi-sys]
 description = "Regenerate the libva bindings (Linux, needs libva headers and clang)"
 run = "tools/gen-vaapi-sys.sh > src/encode/vaapi/sys.rs"
-
