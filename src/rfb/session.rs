@@ -1272,6 +1272,40 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn undecodable_viewer_pasteboard_keeps_session_running() {
+        use crate::clipboard::{ClipContent, MemoryBackend};
+        let backend = Arc::new(MemoryBackend::default());
+        let mut cfg = test_config();
+        cfg.clipboard_backend = Some(backend.clone());
+        let (mut client, server) = start(cfg).await.unwrap();
+
+        let bad_send = |ulen: u32, data: &[u8]| {
+            let mut m = vec![31, 0, 0, 0, 0, 0, 0, 0];
+            m.extend_from_slice(&ulen.to_be_bytes());
+            m.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            m.extend_from_slice(data);
+            m
+        };
+        client
+            .write_all(&bad_send(12, b"not zlib data"))
+            .await
+            .unwrap();
+        client.write_all(&bad_send(u32::MAX, b"x")).await.unwrap();
+        client.write_all(&bad_send(5, &[])).await.unwrap();
+        let mut good = crate::clipboard::proto::server_clipboard_data(0, &ClipContent::text("ok"));
+        good[2] = 0;
+        client.write_all(&good).await.unwrap();
+        wait_until("pasteboard data", || {
+            backend.paste().and_then(|c| c.as_text()).as_deref() == Some("ok")
+        })
+        .await;
+
+        assert!(!server.is_finished());
+        drop(client);
+        server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn shutdown_tears_down_live_sessions() {
         let log = Arc::new(Log::default());
         let mut cfg = test_config();
