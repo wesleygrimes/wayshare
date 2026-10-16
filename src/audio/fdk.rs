@@ -85,6 +85,7 @@ impl Api {
         let mut lib = std::ptr::null_mut();
         for name in ["libfdk-aac.so.2", "libfdk-aac.so"] {
             let c = CString::new(name).unwrap();
+            // SAFETY: The name is NUL-terminated, and a null result is handled right after.
             lib = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
             if !lib.is_null() {
                 break;
@@ -96,6 +97,8 @@ impl Api {
         );
         let sym = |n: &str| -> Result<*mut c_void> {
             let c = CString::new(n).unwrap();
+            // SAFETY: `lib` is non-null (checked before this closure is created), the name is
+            // NUL-terminated, and a null result is returned as an error.
             let p = unsafe { libc::dlsym(lib, c.as_ptr()) };
             if p.is_null() {
                 Err(anyhow!("libfdk-aac lacks {n}"))
@@ -103,6 +106,9 @@ impl Api {
                 Ok(p)
             }
         };
+        // SAFETY: Each pointer is non-null (checked in `sym`) and names the libfdk-aac function
+        // whose C signature matches the target type. The library is never dlclosed, so the
+        // pointers stay valid.
         unsafe {
             Ok(Self {
                 open: std::mem::transmute::<*mut c_void, OpenFn>(sym("aacEncOpen")?),
@@ -149,12 +155,16 @@ pub struct AacEldEncoder {
     frame_length: u32,
 }
 
+// SAFETY: The encoder handle is owned only by this value (closed only in `Drop`) and is used
+// only through `&self`/`&mut self`, so it is never accessed from two threads at once.
 unsafe impl Send for AacEldEncoder {}
 
 impl AacEldEncoder {
     pub fn new(cfg: &EncoderConfig) -> Result<Self> {
         let api = Api::load()?;
         let mut h: Handle = std::ptr::null_mut();
+        // SAFETY: `&mut h` is a valid out pointer, and the handle is null-checked on the next
+        // line.
         let e = unsafe { (api.open)(&mut h, 0, CHANNELS) };
         ensure!(e == 0 && !h.is_null(), "aacEncOpen failed: {e:#x}");
         let mut enc = Self {
@@ -178,9 +188,12 @@ impl AacEldEncoder {
         .chain(cfg.sbr.then_some((AACENC_SBR_RATIO, 1)))
         .chain((cfg.bandwidth > 0).then_some((AACENC_BANDWIDTH, cfg.bandwidth)))
         {
+            // SAFETY: `enc.h` is the non-null handle from aacEncOpen.
             let e = unsafe { (enc.api.set_param)(enc.h, p, v) };
             ensure!(e == 0, "aacEncoder_SetParam({p:#x}, {v}) failed: {e:#x}");
         }
+        // SAFETY: `enc.h` is a live handle, and null descriptors and arguments make
+        // aacEncEncode initialise the encoder. The result is checked below.
         let e = unsafe {
             (enc.api.encode)(
                 enc.h,
@@ -195,7 +208,10 @@ impl AacEldEncoder {
             "aacEncEncode init failed: {e:#x} (bitrate {} unsupported?)",
             cfg.bitrate
         );
+        // SAFETY: `InfoStruct` is `repr(C)` with only integer fields, so all-zero is a valid
+        // value.
         let mut info: InfoStruct = unsafe { std::mem::zeroed() };
+        // SAFETY: `enc.h` is a live handle and `info` is a valid out pointer.
         let e = unsafe { (enc.api.info)(enc.h, &mut info) };
         ensure!(e == 0, "aacEncInfo failed: {e:#x}");
         enc.asc = info.conf_buf[..info.conf_size.min(64) as usize].to_vec();
@@ -253,6 +269,9 @@ impl AacEldEncoder {
             num_anc_bytes: 0,
         };
         let mut out_args = OutArgs::default();
+        // SAFETY: The descriptors point at locals that outlive the call. The input buffer
+        // covers all of `pcm` (length checked above) and the fdk encoder only reads it. The
+        // output buffer covers `self.out`, whose length is passed as the size.
         let e = unsafe { (self.api.encode)(self.h, &in_desc, &out_desc, &in_args, &mut out_args) };
         if e != 0 {
             bail!("aacEncEncode failed: {e:#x}");
@@ -264,6 +283,7 @@ impl AacEldEncoder {
 
 impl Drop for AacEldEncoder {
     fn drop(&mut self) {
+        // SAFETY: `self.h` is the live handle from aacEncOpen and is closed only here.
         unsafe { (self.api.close)(&mut self.h) };
     }
 }

@@ -121,6 +121,7 @@ pub fn monotonic_now() -> Duration {
         tv_sec: 0,
         tv_nsec: 0,
     };
+    // SAFETY: `ts` is a valid, writable timespec for the call.
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
     Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
 }
@@ -254,6 +255,7 @@ impl Capturer {
             events: libc::POLLIN,
             revents: 0,
         };
+        // SAFETY: `pfd` is a valid pollfd and the count is 1.
         let n = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
         if n < 0 {
             let err = std::io::Error::last_os_error();

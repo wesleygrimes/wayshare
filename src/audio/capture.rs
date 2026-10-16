@@ -48,16 +48,21 @@ pub struct MonitorCapture {
     _lib: *mut c_void,
 }
 
+// SAFETY: `s` is the pa_simple stream owned only by this value (freed only in `Drop`) and is
+// used only through `&mut self`, so it is never accessed from two threads at once.
 unsafe impl Send for MonitorCapture {}
 
 impl MonitorCapture {
     /// `device`: a PulseAudio source name; `None` = the default sink's monitor.
     pub fn open(device: Option<&str>) -> Result<Self> {
         let name = CString::new("libpulse-simple.so.0").unwrap();
+        // SAFETY: The name is NUL-terminated, and a null result is rejected on the next line.
         let lib = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
         ensure!(!lib.is_null(), "libpulse-simple.so.0 not found");
         let sym = |n: &str| -> Result<*mut c_void> {
             let c = CString::new(n).unwrap();
+            // SAFETY: `lib` is non-null (checked above), the name is NUL-terminated, and a null
+            // result is rejected below.
             let p = unsafe { libc::dlsym(lib, c.as_ptr()) };
             if p.is_null() {
                 Err(anyhow!("libpulse-simple lacks {n}"))
@@ -65,6 +70,9 @@ impl MonitorCapture {
                 Ok(p)
             }
         };
+        // SAFETY: Each pointer is non-null (checked in `sym`) and names the libpulse-simple
+        // function whose C signature matches the target type. The library is never dlclosed, so
+        // the pointers stay valid.
         let (new, read, free): (NewFn, ReadFn, FreeFn) = unsafe {
             (
                 std::mem::transmute::<*mut c_void, NewFn>(sym("pa_simple_new")?),
@@ -88,6 +96,8 @@ impl MonitorCapture {
         let stream = CString::new("screen sharing audio").unwrap();
         let dev = CString::new(device.unwrap_or(DEFAULT_MONITOR))?;
         let mut err = 0;
+        // SAFETY: Every pointer argument is null or points to a value that lives past the call,
+        // and `err` is a valid out pointer. A null stream is rejected below.
         let s = unsafe {
             new(
                 std::ptr::null(),
@@ -120,6 +130,8 @@ impl MonitorCapture {
         out: &mut [i16; (SAMPLES_PER_FRAME * CHANNELS) as usize],
     ) -> Result<()> {
         let mut err = 0;
+        // SAFETY: `self.s` is the live stream from pa_simple_new, `out` is writable for
+        // `out.len() * 2` bytes, and `err` is a valid out pointer.
         let r = unsafe {
             (self.read)(
                 self.s,
@@ -135,6 +147,7 @@ impl MonitorCapture {
 
 impl Drop for MonitorCapture {
     fn drop(&mut self) {
+        // SAFETY: `self.s` is the non-null stream from pa_simple_new and is freed only here.
         unsafe { (self.free)(self.s) };
     }
 }

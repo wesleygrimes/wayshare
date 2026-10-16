@@ -172,6 +172,7 @@ fn run(
                     revents: 0,
                 },
             ];
+            // SAFETY: `fds` is a live array of two pollfds and the count is 2.
             unsafe { libc::poll(fds.as_mut_ptr(), 2, 500) };
             if fds[0].revents != 0 {
                 match guard.read() {
@@ -285,15 +286,19 @@ impl State {
 
 fn pipe() -> Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0; 2];
+    // SAFETY: `fds` has room for the two descriptors pipe2 writes.
     if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
         return Err(std::io::Error::last_os_error()).context("pipe2");
     }
+    // SAFETY: pipe2 succeeded, so both descriptors are new and owned by nobody else.
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
 
 fn set_nonblocking(f: &impl AsRawFd) -> Result<()> {
     let fd = f.as_raw_fd();
+    // SAFETY: F_GETFL takes no pointer argument, and `fd` is borrowed from a live handle.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    // SAFETY: F_SETFL takes an int, and `fd` is borrowed from a live handle.
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(std::io::Error::last_os_error()).context("fcntl");
     }
@@ -316,6 +321,8 @@ fn read_fd(fd: OwnedFd, cap: usize) -> Result<Vec<u8>> {
             events: libc::POLLIN,
             revents: 0,
         };
+        // SAFETY: `p` is a valid pollfd for the call, the count is 1, and `f` keeps the fd
+        // open.
         unsafe { libc::poll(&mut p, 1, left.as_millis() as i32) };
         match f.read(&mut buf) {
             Ok(0) => return Ok(out),

@@ -132,6 +132,8 @@ impl TileDiffer {
         let r = (|| -> Result<Parts> {
             let program = gl.program(&src)?;
             let g = &gl.gl;
+            // SAFETY: The GL context was made current on this thread above; the calls only
+            // create and size objects owned by that context.
             let (hashes, flags) = unsafe {
                 let hashes = g.create_texture().map_err(|e| anyhow::anyhow!(e))?;
                 g.bind_texture(glow::TEXTURE_2D, Some(hashes));
@@ -232,6 +234,10 @@ impl TileDiffer {
         let tex = self.import(buf)?;
         let l = self.layout;
         let gl = &self.gl.gl;
+        // SAFETY: `detect` makes the GL context current before calling `dispatch`, and every
+        // texture, buffer and program bound here was created on it and is still alive.
+        // `map_buffer_range` is checked for null before the slice is built, covers `TILE_COUNT`
+        // u32 flags, and is unmapped before the block ends.
         unsafe {
             gl.bind_buffer(glow::SHADER_STORAGE_BUFFER, Some(self.flags));
             gl.buffer_sub_data_u8_slice(glow::SHADER_STORAGE_BUFFER, 0, &[0; 4 * TILE_COUNT]);
@@ -344,6 +350,8 @@ impl Drop for TileDiffer {
                     self.gl.forget(uv);
                 }
             }
+            // SAFETY: `make_current` succeeded above, and these handles were created on this
+            // context and are deleted only here.
             unsafe {
                 self.gl.gl.delete_texture(self.hashes);
                 self.gl.gl.delete_buffer(self.flags);

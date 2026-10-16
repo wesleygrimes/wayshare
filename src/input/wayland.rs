@@ -237,10 +237,12 @@ impl WaylandInput {
 }
 
 fn keymap_fd(text: &str) -> Result<OwnedFd> {
+    // SAFETY: The name is a NUL-terminated literal.
     let raw = unsafe { libc::memfd_create(c"wayshare-keymap".as_ptr(), libc::MFD_CLOEXEC) };
     if raw < 0 {
         return Err(std::io::Error::last_os_error()).context("memfd_create");
     }
+    // SAFETY: `raw` is a fresh fd, checked non-negative above, that nothing else owns.
     let fd = unsafe { OwnedFd::from_raw_fd(raw) };
     let mut f = std::fs::File::from(fd);
     f.write_all(text.as_bytes())?;

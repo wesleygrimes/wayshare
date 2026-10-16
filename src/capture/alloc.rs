@@ -38,7 +38,8 @@ pub struct Allocator {
     udmabuf: Option<File>,
 }
 
-// The GBM device is only used from the thread that owns the capturer.
+// SAFETY: The GBM device and the udmabuf file are owned solely by the `Allocator` and only used
+// through it, and the capturer that owns it uses it from one thread at a time.
 unsafe impl Send for Allocator {}
 
 impl Allocator {
@@ -142,6 +143,10 @@ impl Allocator {
         let stride = (width * 4).next_multiple_of(256);
         let page = 4096u64;
         let size = (stride as u64 * height as u64).next_multiple_of(page);
+        // SAFETY: `memfd` is checked for failure before `OwnedFd` takes sole ownership.
+        // `UdmabufCreate` is `repr(C)` with the layout of the kernel's struct udmabuf_create
+        // and outlives the ioctl. The returned fd is checked for failure before
+        // `OwnedFd::from_raw_fd` takes ownership.
         unsafe {
             let memfd = libc::memfd_create(
                 c"wayshare-capture".as_ptr(),

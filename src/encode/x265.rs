@@ -25,7 +25,9 @@ pub struct X265Encoder {
     tiles: Tiles<Session>,
 }
 
-// The tile differ's EGL context is made current only for the duration of each call.
+// SAFETY: The x265 handles are owned only by `Session` and used only through `&mut self`, and
+// the tile differ's EGL context is made current only for the duration of each call, so the
+// encoder is never used from two threads at once.
 unsafe impl Send for X265Encoder {}
 
 impl X265Encoder {
@@ -140,6 +142,8 @@ impl Session {
 
     fn close(&mut self) {
         let api = self.api;
+        // SAFETY: Each handle is non-null here, came from the matching alloc/open function, and
+        // is nulled right after, so it is freed once.
         unsafe {
             if !self.enc.is_null() {
                 (api.encoder_close)(self.enc);
@@ -157,11 +161,14 @@ impl Session {
     fn open(&mut self) -> Result<()> {
         self.close();
         let (api, cfg) = (self.api, &self.cfg);
+        // SAFETY: x265_param_alloc has no preconditions, and null is checked on the next line.
         self.param = unsafe { (api.param_alloc)() };
         if self.param.is_null() {
             bail!("x265_param_alloc failed");
         }
         let preset = CString::new(cfg.x265.preset.as_str())?;
+        // SAFETY: `self.param` is non-null (checked above), and the preset and tune strings are
+        // NUL-terminated.
         if unsafe {
             (api.param_default_preset)(self.param, preset.as_ptr(), c"zerolatency".as_ptr())
         } < 0
@@ -240,6 +247,8 @@ impl Session {
         }
         for (k, v) in &params {
             let (kc, vc) = (CString::new(*k)?, CString::new(v.as_str())?);
+            // SAFETY: `self.param` is non-null, and `kc` and `vc` are live NUL-terminated
+            // strings.
             let r = unsafe { (api.param_parse)(self.param, kc.as_ptr(), vc.as_ptr()) };
             if r != 0 {
                 bail!("x265: bad parameter {k}={v} ({r})");
@@ -250,9 +259,12 @@ impl Session {
         } else {
             c"main"
         };
+        // SAFETY: `self.param` is non-null, and `profile` is a NUL-terminated literal.
         if unsafe { (api.param_apply_profile)(self.param, profile.as_ptr()) } < 0 {
             bail!("x265: profile {profile:?} rejected");
         }
+        // SAFETY: `self.param` is non-null and configured above. The encoder handle is null-
+        // checked before use, and the picture comes from picture_alloc before picture_init.
         unsafe {
             self.enc = (api.encoder_open)(self.param);
             if self.enc.is_null() {
@@ -453,7 +465,8 @@ const _: () = assert!(std::mem::offset_of!(Api, param_alloc) == 48);
 const _: () = assert!(std::mem::offset_of!(Api, encoder_encode) == 176);
 const _: () = assert!(std::mem::offset_of!(Api, encoder_close) == 200);
 
-// The table is immutable static data inside libx265.
+// SAFETY: The table is plain function pointers, integers and static strings returned by
+// x265_api_query. The library is never dlclosed, so it lives for the rest of the process.
 unsafe impl Sync for Api {}
 
 type ApiQuery =
@@ -464,22 +477,29 @@ fn api() -> Result<&'static Api, String> {
     let addr = API.get_or_init(|| {
         let handle = ["libx265.so", "libx265.so.217"].iter().find_map(|name| {
             let c = CString::new(*name).unwrap();
+            // SAFETY: The name is NUL-terminated, and a null result is skipped.
             let h = unsafe { libc::dlopen(c.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
             (!h.is_null()).then_some(h)
         });
         let handle = handle.ok_or("libx265 not found")?;
+        // SAFETY: `handle` is a live, non-null dlopen handle and the name is a NUL-terminated
+        // literal.
         let query = unsafe { libc::dlsym(handle, c"x265_api_query".as_ptr()) };
         if query.is_null() {
             return Err("libx265 has no x265_api_query".into());
         }
+        // SAFETY: `query` is non-null (checked above) and is x265_api_query, whose C signature
+        // is `ApiQuery`.
         let query: ApiQuery = unsafe { std::mem::transmute(query) };
         let mut err = 0;
+        // SAFETY: `err` is a valid out pointer, and the result is null-checked below.
         let a = unsafe { query(8, X265_BUILD, &mut err) };
         if a.is_null() {
             return Err(format!(
                 "libx265 doesn't provide 8-bit API build {X265_BUILD} (error {err})"
             ));
         }
+        // SAFETY: `a` is non-null (checked above) and points at the library's static API table.
         let ap = unsafe { &*a };
         if ap.api_build_number != X265_BUILD || ap.sizeof_picture != SIZEOF_PICTURE {
             return Err(format!(
@@ -489,6 +509,8 @@ fn api() -> Result<&'static Api, String> {
         }
         Ok(a as usize)
     });
+    // SAFETY: `a` is the non-null table pointer validated in the initialiser, and the library
+    // handle is never closed, so the table lives for the rest of the process.
     addr.clone().map(|a| unsafe { &*(a as *const Api) })
 }
 
