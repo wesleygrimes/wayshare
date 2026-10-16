@@ -82,8 +82,8 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         # cog verify panics without a git user.name and user.email.
         run: |
-          git config user.name ci
-          git config user.email ci@localhost
+          git config user.name "Wes Grimes"
+          git config user.email wesgrimes@hey.com
           mise exec -- cog verify "$PR_TITLE"
           printf '%s\n' "$PR_TITLE" | grep -Eq '^[a-z]+(\([^)]+\))?!?: ' ||
             { echo "PR title type must be lowercase" >&2; exit 1; }
