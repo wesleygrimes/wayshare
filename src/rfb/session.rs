@@ -1158,7 +1158,42 @@ mod tests {
         Ok((client, server))
     }
 
-    async fn session_with(log: Arc<Log>, after_init: &[u8]) -> Result<()> {
+    const WAIT: Duration = Duration::from_secs(10);
+
+    async fn wait_until(what: &str, mut cond: impl FnMut() -> bool) {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        while !cond() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    fn has_seq(hay: &[u8], needle: &[u8]) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle)
+    }
+
+    async fn read_until(
+        client: &mut TcpStream,
+        what: &str,
+        done: impl Fn(&[u8]) -> bool,
+    ) -> Vec<u8> {
+        let deadline = tokio::time::Instant::now() + WAIT;
+        let mut got = Vec::new();
+        let mut buf = vec![0u8; 1 << 16];
+        while !done(&got) {
+            match tokio::time::timeout_at(deadline, client.read(&mut buf)).await {
+                Ok(Ok(n)) if n > 0 => got.extend_from_slice(&buf[..n]),
+                Ok(r) => panic!("connection ended while waiting for {what}: {r:?}"),
+                Err(_) => panic!("timed out waiting for {what}"),
+            }
+        }
+        got
+    }
+
+    async fn session_with(log: Arc<Log>, after_init: &[u8], until: &str) -> Result<()> {
         let mut cfg = test_config();
         cfg.display = Some(Arc::new(FakeDisplay(log.clone())));
         cfg.hp = Some(Arc::new(FakeHp(log.clone())));
@@ -1168,12 +1203,7 @@ mod tests {
         }));
         let (mut client, server) = start(cfg).await?;
         client.write_all(after_init).await?;
-        for _ in 0..100 {
-            if log.has("configure 7") || log.has("pointer 1") {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        wait_until(until, || log.has(until)).await;
         drop(client);
         match server.await {
             Ok(r) => r,
@@ -1200,7 +1230,11 @@ mod tests {
         let (mut client, server) = start(cfg).await.unwrap();
 
         client.write_all(&[21, 0, 0, 1, 0, 0, 0, 0]).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        client.write_all(&[11, 1, 0, 0, 0, 0, 0, 76]).await.unwrap();
+        let hdr = read_msg(&mut client, 16).await;
+        assert_eq!(&hdr[..8], &[31, 0, 0, 0, 0, 0, 0, 76]);
+        let zlen = u32::from_be_bytes(hdr[12..16].try_into().unwrap()) as usize;
+        read_msg(&mut client, zlen).await;
         backend.copy(ClipContent::text("from linux"));
         assert_eq!(read_msg(&mut client, 8).await, [20, 0, 0, 4, 0, 1, 0, 2]);
 
@@ -1223,19 +1257,14 @@ mod tests {
         let mut send = crate::clipboard::proto::server_clipboard_data(0, &mac);
         send[2] = 0;
         client.write_all(&send).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert_eq!(
-            backend.paste().and_then(|c| c.as_text()).as_deref(),
-            Some("from mac")
-        );
+        wait_until("pasteboard data", || {
+            backend.paste().and_then(|c| c.as_text()).as_deref() == Some("from mac")
+        })
+        .await;
 
         send[2] = 1;
         client.write_all(&send).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(
-            backend.paste().is_none(),
-            "promised data is not there until the viewer sends it"
-        );
+        wait_until("promised pasteboard", || backend.paste().is_none()).await;
         assert_eq!(read_msg(&mut client, 8).await, [20, 0, 0, 4, 0, 1, 0, 3]);
 
         drop(client);
@@ -1260,12 +1289,7 @@ mod tests {
             .write_all(include_bytes!("../../tests/fixtures/msg29-0.bin"))
             .await
             .unwrap();
-        for _ in 0..100 {
-            if log.has("configure 1") {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        wait_until("configure 1", || log.has("configure 1")).await;
         stop_tx.send(()).unwrap();
         server.await.unwrap().unwrap();
         assert!(log.has("restore 1"), "{:?}", log.0.lock().unwrap());
@@ -1276,7 +1300,7 @@ mod tests {
         let log = Arc::new(Log::default());
         let mut msgs = include_bytes!("../../tests/fixtures/msg29-0.bin").to_vec();
         msgs.extend_from_slice(&[5, 0, 0, 1, 0, 1]);
-        session_with(log.clone(), &msgs).await.unwrap();
+        session_with(log.clone(), &msgs, "pointer 1").await.unwrap();
         for e in [
             "configure 7",
             "pointer 1",
@@ -1314,7 +1338,7 @@ mod tests {
         let log = Arc::new(Log::default());
         let mut msgs = include_bytes!("../../tests/fixtures/msg29-0.bin").to_vec();
         msgs.extend_from_slice(&[5, 0, 0x02, 0x9a, 0, 1]);
-        let r = session_with(log.clone(), &msgs).await;
+        let r = session_with(log.clone(), &msgs, "release").await;
         assert!(r.unwrap_err().to_string().contains("panic"));
         for e in ["configure 7", "release", "hp stop 7", "restore 7"] {
             assert!(log.has(e), "missing {e:?} in {:?}", log.0.lock().unwrap());
@@ -1410,13 +1434,14 @@ mod tests {
         };
         msgs.extend_from_slice(&config.encode());
         client.write_all(&msgs).await.unwrap();
-        // Let a tick announce the new size before requesting it.
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        let size = pseudo::desktop_size(80, 48);
+        read_until(&mut client, "DesktopSize", |got| has_seq(got, &size)).await;
         client
             .write_all(&[3, 0, 0, 0, 0, 0, 0, 80, 0, 48])
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        let raw = [0, 0, 0, 0, 0, 64, 0, 48, 0, 0, 0, 0];
+        read_until(&mut client, "full update", |got| has_seq(got, &raw)).await;
         drop(client);
         if let Err(e) = server.await.unwrap() {
             assert!(!format!("{e:#}").contains("panic"), "{e:#}");
@@ -1457,31 +1482,19 @@ mod tests {
         msgs.extend_from_slice(include_bytes!("../../tests/fixtures/msg29-0.bin"));
         msgs.extend_from_slice(&media_config().encode());
         client.write_all(&msgs).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        wait_until("first offer", || log.has("ports")).await;
         assert!(!log.has("hp stop"), "{:?}", log.0.lock().unwrap());
         client
             .write_all(include_bytes!("../../tests/fixtures/msg29-0.bin"))
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        wait_until("renegotiation", || log.0.lock().unwrap().len() >= 3).await;
         let events = log.0.lock().unwrap().clone();
         assert_eq!(events, ["ports", "hp stop", "ports"]);
         // The deliberate stop must not look like a media failure (1010 type 3 to the viewer).
-        let mut got = Vec::new();
-        let mut buf = vec![0u8; 1 << 16];
-        while let Ok(Ok(n)) =
-            tokio::time::timeout(Duration::from_millis(100), client.read(&mut buf)).await
-        {
-            if n == 0 {
-                break;
-            }
-            got.extend_from_slice(&buf[..n]);
-        }
+        let got = read_for(&mut client, Duration::from_millis(100)).await;
         let err = media::error_update(3, 0);
-        assert!(
-            !got.windows(err.len()).any(|w| w == err),
-            "sent a media error"
-        );
+        assert!(!has_seq(&got, &err), "sent a media error");
         drop(client);
         let _ = server.await.unwrap();
     }
@@ -1513,26 +1526,25 @@ mod tests {
         msgs.extend_from_slice(&ENC_DESKTOP_SIZE.to_be_bytes());
         msgs.extend_from_slice(&media_config().encode());
         client.write_all(&msgs).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        wait_until("HP start", || {
+            hp.1.load(std::sync::atomic::Ordering::Relaxed)
+        })
+        .await;
         client
             .write_all(include_bytes!("../../tests/fixtures/msg29-0.bin"))
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        wait_until("renegotiation", || log.0.lock().unwrap().len() >= 3).await;
         hp.2.store(true, std::sync::atomic::Ordering::Relaxed);
-        read_for(&mut client, Duration::from_millis(100)).await;
         client.write_all(&media_config().encode()).await.unwrap();
-        let got = read_for(&mut client, Duration::from_millis(300)).await;
         let err = media::error_update(2, 0);
-        let at = got
-            .windows(err.len())
-            .position(|w| w == err)
-            .expect("no media error");
         let raw = [0, 0, 0, 0, 0, 64, 0, 48, 0, 0, 0, 0];
-        assert!(
-            got[at..].windows(raw.len()).any(|w| w == raw),
-            "no Standard update"
-        );
+        read_until(&mut client, "Standard update after media error", |got| {
+            got.windows(err.len())
+                .position(|w| w == err)
+                .is_some_and(|at| has_seq(&got[at..], &raw))
+        })
+        .await;
         drop(client);
         let _ = server.await.unwrap();
     }
@@ -1549,12 +1561,14 @@ mod tests {
         msgs.extend_from_slice(&ENC_MEDIA_STREAM.to_be_bytes());
         msgs.extend_from_slice(&media_config().encode());
         client.write_all(&msgs).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        wait_until("HP start", || {
+            hp.1.load(std::sync::atomic::Ordering::Relaxed)
+        })
+        .await;
         hp.1.store(false, std::sync::atomic::Ordering::Relaxed);
-        let got = read_for(&mut client, Duration::from_millis(300)).await;
         let err = media::error_update(3, 0);
-        assert!(got.windows(err.len()).any(|w| w == err), "no fallback");
-        assert!(log.has("hp stop"), "{:?}", log.0.lock().unwrap());
+        read_until(&mut client, "fallback", |got| has_seq(got, &err)).await;
+        wait_until("hp stop", || log.has("hp stop")).await;
         drop(client);
         let _ = server.await.unwrap();
     }
