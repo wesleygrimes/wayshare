@@ -13,7 +13,7 @@ Needs Hyprland 0.56 or newer and systemd.
 
 ## Demo
 
-https://github.com/user-attachments/assets/b43a3ae0-370d-4816-958b-87a16504bd8a
+![wayshare demo](https://github.com/user-attachments/assets/b43a3ae0-370d-4816-958b-87a16504bd8a)
 
 ## Install
 
