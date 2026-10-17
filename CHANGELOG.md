@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.4 - 2026-10-17
+
+### Fixes
+
+- Capture now works on drivers that can't map GPU buffers for CPU reads, such as the NVIDIA proprietary driver. wayshare switches to shared memory capture on its own, and the error no longer says "Success". Thanks @ernestodisa for reporting it and pointing to the fix. ([#20](https://github.com/wesleygrimes/wayshare/pull/20))
+- The VA-API entrypoint query no longer overflows its buffer when a driver reports more than 32 entrypoints. ([#18](https://github.com/wesleygrimes/wayshare/pull/18))
+
+### Maintenance
+
+- The `input stats` log line now counts High Performance mouse events, to help track down mouse problems in that mode. Key contents are still never logged. Thanks @kyler505. ([#25](https://github.com/wesleygrimes/wayshare/pull/25))
+- The README credits kyler505, ernestodisa and thebytorsnowdog as contributors. ([#26](https://github.com/wesleygrimes/wayshare/pull/26), [#27](https://github.com/wesleygrimes/wayshare/pull/27), [#28](https://github.com/wesleygrimes/wayshare/pull/28))
+
+**Full changelog**: [v0.1.3...v0.1.4](https://github.com/wesleygrimes/wayshare/compare/v0.1.3...v0.1.4)
+
 ## 0.1.3 - 2026-10-17
 
 ### Fixes
