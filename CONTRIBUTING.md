@@ -8,12 +8,12 @@ from logs. Report security problems privately; see [SECURITY.md](SECURITY.md).
 
 ## Pull requests
 
-Pull requests are limited to collaborators. Open an issue first to propose work. PR access
-is granted deliberately, not by having a past commit.
+Pull requests are welcome from anyone. For anything bigger than a small fix, open an issue
+first so we can agree on the approach before you write the code.
 
 ## Branches and commits
 
-- Branch as `wes/<task-name>`.
+- Branch as `<your-name>/<task-name>`.
 - Write commits and PR titles as `<type>(optional-scope): <description>` following
   [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 - Types: `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`,
@@ -42,3 +42,16 @@ Run `mise run check` before pushing. Setup, prerequisites, and the other tasks a
 State the problem, the result, and how you verified it. Keep PRs small and within one
 purpose. Say which checks you could not run. Writing follows the rules in
 [AGENTS.md](AGENTS.md), including the `$unslop` pass for docs and templates.
+
+## Contributors
+
+Help is credited in the README with [all-contributors](https://allcontributors.org).
+On a pull request or issue, comment:
+
+```text
+@all-contributors please add @username for code
+```
+
+Use the right [emoji key](https://allcontributors.org/docs/en/emoji-key) type (`code`,
+`doc`, `bug`, `ideas`, and so on). The bot opens a small follow-up pull request that
+updates the contributor table.
