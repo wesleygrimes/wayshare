@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.2 - 2026-10-17
+
+### Fixes
+
+- Capture no longer shows scrambled frames on GPUs that hand out tiled buffers. Thanks @andresark. ([#11](https://github.com/wesleygrimes/wayshare/pull/11))
+
+### Documentation
+
+- The README has a demo video and a real screenshot, and leads with the Screen Sharing app for connecting. ([#4](https://github.com/wesleygrimes/wayshare/pull/4), [#6](https://github.com/wesleygrimes/wayshare/pull/6), [#7](https://github.com/wesleygrimes/wayshare/pull/7), [#8](https://github.com/wesleygrimes/wayshare/pull/8))
+- The README notes that the AUR and `omarchy pkg` installs are coming soon. ([#5](https://github.com/wesleygrimes/wayshare/pull/5))
+- Pull requests are open to everyone, and the README credits contributors. ([#10](https://github.com/wesleygrimes/wayshare/pull/10))
+
+**Full changelog**: [v0.1.1...v0.1.2](https://github.com/wesleygrimes/wayshare/compare/v0.1.1...v0.1.2)
+
 ## 0.1.1 - 2026-10-16
 
 First public release.
