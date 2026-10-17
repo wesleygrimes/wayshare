@@ -43,6 +43,16 @@
         "bug",
         "userTesting"
       ]
+    },
+    {
+      "login": "ernestodisa",
+      "name": "ernestodisa",
+      "avatar_url": "https://avatars.githubusercontent.com/u/285854814?v=4",
+      "profile": "https://github.com/ernestodisa",
+      "contributions": [
+        "bug",
+        "ideas"
+      ]
     }
   ],
   "commitType": "docs"
