@@ -43,6 +43,15 @@
         "bug",
         "userTesting"
       ]
+    },
+    {
+      "login": "thebytorsnowdog",
+      "name": "Snowy",
+      "avatar_url": "https://avatars.githubusercontent.com/u/215750096?v=4",
+      "profile": "https://github.com/thebytorsnowdog",
+      "contributions": [
+        "userTesting"
+      ]
     }
   ],
   "commitType": "docs"
