@@ -7,7 +7,7 @@
 - Capture now works on drivers that can't map GPU buffers for CPU reads, such as the NVIDIA proprietary driver. wayshare switches to shared memory capture on its own, and the error no longer says "Success". Thanks @ernestodisa for reporting it and pointing to the fix. ([#20](https://github.com/wesleygrimes/wayshare/pull/20))
 - The screen no longer comes through scrambled on machines with two GPUs when the compositor uses wlr-screencopy. wayshare now allocates capture buffers on the compositor's main GPU. Thanks @andresark. ([#23](https://github.com/wesleygrimes/wayshare/pull/23))
 - High Performance audio no longer starts before the viewer is ready or keeps sending after disconnect, and shutting it down no longer waits on a blocked read. Thanks @andresark. ([#24](https://github.com/wesleygrimes/wayshare/pull/24))
-- High Performance mode now checks the encoder on the GPU that capture uses. If that GPU can't encode HEVC with VA-API, it falls back to x265 instead of failing to start. ([#PR](https://github.com/wesleygrimes/wayshare/pull/PR))
+- High Performance mode now checks the encoder on the GPU that capture uses. If that GPU can't encode HEVC with VA-API, it falls back to x265 instead of failing to start. ([#35](https://github.com/wesleygrimes/wayshare/pull/35))
 - The VA-API entrypoint query no longer overflows its buffer when a driver reports more than 32 entrypoints. ([#18](https://github.com/wesleygrimes/wayshare/pull/18))
 
 ### Maintenance
