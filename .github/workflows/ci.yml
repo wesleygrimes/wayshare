@@ -84,6 +84,9 @@ jobs:
         run: |
           git config user.name "Wes Grimes"
           git config user.email wesgrimes@hey.com
-          mise exec -- cog verify "$PR_TITLE"
-          printf '%s\n' "$PR_TITLE" | grep -Eq '^[a-z]+(\([^)]+\))?!?: ' ||
-            { echo "PR title type must be lowercase" >&2; exit 1; }
+          hint="Rename the PR as <type>(optional-scope): <description>, like 'fix: capture through wl_shm on virtio-gpu'. Types are listed in CONTRIBUTING.md."
+          if ! mise exec -- cog verify "$PR_TITLE" ||
+            ! printf '%s\n' "$PR_TITLE" | grep -Eq '^[a-z]+(\([^)]+\))?!?: '; then
+            echo "::error title=PR title::$hint"
+            exit 1
+          fi
