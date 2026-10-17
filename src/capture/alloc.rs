@@ -3,6 +3,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
 use gbm::{BufferObjectFlags, Device, Format, Modifier};
@@ -13,16 +14,16 @@ const DEFAULT_NODE: &str = "/dev/dri/renderD128";
 pub(super) const MOD_LINEAR: u64 = 0;
 pub(super) const MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
 
-fn explicit_modifiers(modifiers: &[u64]) -> Option<&[u64]> {
-    if modifiers.is_empty() || modifiers.contains(&MOD_INVALID) {
-        None
-    } else {
-        Some(modifiers)
-    }
+fn explicit_modifiers(modifiers: &[u64]) -> Vec<u64> {
+    modifiers
+        .iter()
+        .copied()
+        .filter(|&m| m != MOD_INVALID)
+        .collect()
 }
 
 pub(super) fn supports_linear(modifiers: &[u64]) -> bool {
-    explicit_modifiers(modifiers).is_none() || modifiers.contains(&MOD_LINEAR)
+    modifiers.iter().all(|&m| m == MOD_INVALID) || modifiers.contains(&MOD_LINEAR)
 }
 
 pub(super) fn import_modifier(modifier: u64, offered: &[u64]) -> u64 {
@@ -37,11 +38,10 @@ pub(super) fn import_modifier(modifier: u64, offered: &[u64]) -> u64 {
 /// Where capture buffers live.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Memory {
-    /// GBM allocation (VRAM on this APU). CPU reads are uncached and slow.
+    /// GBM allocation. Nonlinear buffers use GBM for CPU reads.
     #[default]
     Gpu,
-    /// Cached system RAM via udmabuf, LINEAR. Fast CPU reads; the compositor and VAAPI still
-    /// import it as a dmabuf. Requires LINEAR or implicit modifier support.
+    /// Prefer cached system RAM via udmabuf, LINEAR. Use GBM when only tiled layouts are offered.
     System,
 }
 
@@ -51,18 +51,52 @@ pub struct Allocation {
     pub id: u64,
     pub modifier: u64,
     pub planes: Vec<Plane>,
+    pub gbm: Option<GbmBuffer>,
+}
+
+pub(super) struct GbmBuffer {
+    bo: Mutex<gbm::BufferObject<()>>,
+    // Keep the device fd open until the buffer is destroyed, even after a node switch.
+    _device: Device<Arc<File>>,
+}
+
+impl GbmBuffer {
+    pub fn read(&self, width: u32, height: u32) -> Result<super::ReadGuard<'static>> {
+        let bo = self.bo.lock().unwrap();
+        // GBM detiles into a CPU view. Copy it before the closure unmaps that view.
+        bo.map(0, 0, width, height, |map| {
+            super::ReadGuard::owned(map.buffer().to_vec(), map.stride() as usize)
+        })
+        .context("gbm_bo_map capture buffer")
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum AllocationPath {
+    Udmabuf,
+    GbmImplicit,
+    GbmExplicit(Vec<u64>),
+}
+
+pub(super) fn allocation_path(memory: Memory, modifiers: &[u64]) -> AllocationPath {
+    if memory == Memory::System && supports_linear(modifiers) {
+        AllocationPath::Udmabuf
+    } else {
+        let explicit = explicit_modifiers(modifiers);
+        if explicit.is_empty() {
+            AllocationPath::GbmImplicit
+        } else {
+            AllocationPath::GbmExplicit(explicit)
+        }
+    }
 }
 
 pub struct Allocator {
     node: PathBuf,
-    gbm: Device<File>,
+    gbm: Device<Arc<File>>,
     pub memory: Memory,
     udmabuf: Option<File>,
 }
-
-// SAFETY: The GBM device and the udmabuf file are owned solely by the `Allocator` and only used
-// through it, and the capturer that owns it uses it from one thread at a time.
-unsafe impl Send for Allocator {}
 
 impl Allocator {
     pub fn new(node: Option<&Path>) -> Result<Self> {
@@ -73,7 +107,7 @@ impl Allocator {
             .open(&node)
             .with_context(|| format!("open {}", node.display()))?;
         Ok(Self {
-            gbm: Device::new(file)?,
+            gbm: Device::new(Arc::new(file))?,
             node,
             memory: Memory::Gpu,
             udmabuf: None,
@@ -95,7 +129,7 @@ impl Allocator {
         Ok(())
     }
 
-    /// Empty `modifiers` or INVALID lets the driver choose an implicit modifier.
+    /// Use explicit modifiers when offered; an empty list or INVALID alone is implicit.
     pub fn allocate(
         &mut self,
         width: u32,
@@ -105,25 +139,27 @@ impl Allocator {
     ) -> Result<Allocation> {
         if self.memory == Memory::System {
             super::validate_cpu_format(fourcc)?;
-            if !supports_linear(modifiers) {
-                tracing::error!(?modifiers, "CPU capture requires LINEAR buffers");
-                bail!("CPU capture requires LINEAR buffers; offered modifiers: {modifiers:#x?}");
-            }
+        }
+        let path = allocation_path(self.memory, modifiers);
+        if path == AllocationPath::Udmabuf {
             return self.allocate_udmabuf(width, height);
         }
         let format = Format::try_from(fourcc).context("unknown fourcc")?;
         let flags = BufferObjectFlags::RENDERING;
-        let bo = if let Some(modifiers) = explicit_modifiers(modifiers) {
-            self.gbm.create_buffer_object_with_modifiers2::<()>(
-                width,
-                height,
-                format,
-                modifiers.iter().map(|&m| Modifier::from(m)),
-                flags,
-            )?
-        } else {
-            self.gbm
-                .create_buffer_object::<()>(width, height, format, flags)?
+        let bo = match path {
+            AllocationPath::GbmExplicit(modifiers) => {
+                self.gbm.create_buffer_object_with_modifiers2::<()>(
+                    width,
+                    height,
+                    format,
+                    modifiers.into_iter().map(Modifier::from),
+                    flags,
+                )?
+            }
+            AllocationPath::GbmImplicit => self
+                .gbm
+                .create_buffer_object::<()>(width, height, format, flags)?,
+            AllocationPath::Udmabuf => unreachable!(),
         };
         let planes = (0..bo.plane_count() as i32)
             .map(|i| {
@@ -138,6 +174,10 @@ impl Allocator {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             modifier: bo.modifier().into(),
             planes,
+            gbm: Some(GbmBuffer {
+                bo: Mutex::new(bo),
+                _device: self.gbm.clone(),
+            }),
         })
     }
 }
@@ -203,6 +243,7 @@ impl Allocator {
             Ok(Allocation {
                 id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
                 modifier: MOD_LINEAR,
+                gbm: None,
                 planes: vec![Plane {
                     fd: OwnedFd::from_raw_fd(fd),
                     offset: 0,
@@ -245,8 +286,8 @@ mod tests {
 
     #[test]
     fn invalid_and_empty_modifiers_use_implicit_allocation() {
-        for modifiers in [&[][..], &[MOD_INVALID], &[TILED, MOD_INVALID, MOD_LINEAR]] {
-            assert_eq!(explicit_modifiers(modifiers), None);
+        for modifiers in [&[][..], &[MOD_INVALID]] {
+            assert!(explicit_modifiers(modifiers).is_empty());
             assert!(supports_linear(modifiers));
         }
     }
@@ -254,9 +295,27 @@ mod tests {
     #[test]
     fn explicit_modifiers_keep_the_offered_layouts() {
         for modifiers in [&[MOD_LINEAR][..], &[TILED], &[TILED, MOD_LINEAR]] {
-            assert_eq!(explicit_modifiers(modifiers), Some(modifiers));
+            assert_eq!(explicit_modifiers(modifiers), modifiers);
             assert_eq!(supports_linear(modifiers), modifiers.contains(&MOD_LINEAR));
         }
+    }
+
+    #[test]
+    fn mixed_offers_keep_explicit_modifiers() {
+        let offered = [TILED, MOD_INVALID, MOD_LINEAR];
+        assert_eq!(explicit_modifiers(&offered), vec![TILED, MOD_LINEAR]);
+        assert_eq!(
+            allocation_path(Memory::Gpu, &offered),
+            AllocationPath::GbmExplicit(vec![TILED, MOD_LINEAR])
+        );
+        assert_eq!(
+            allocation_path(Memory::System, &[TILED, MOD_INVALID]),
+            AllocationPath::GbmExplicit(vec![TILED])
+        );
+        assert_eq!(
+            import_modifier(TILED, &[MOD_INVALID, MOD_LINEAR]),
+            MOD_INVALID
+        );
     }
 
     #[test]

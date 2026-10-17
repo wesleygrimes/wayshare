@@ -9,6 +9,7 @@ mod diff;
 mod gl;
 mod mapping;
 
+use std::collections::HashMap;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,7 +30,7 @@ use wayland_protocols::ext::image_copy_capture::v1::client::{
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_buffer_params_v1::{self as dmabuf_params, ZwpLinuxBufferParamsV1},
-    zwp_linux_dmabuf_v1::ZwpLinuxDmabufV1,
+    zwp_linux_dmabuf_v1::{self as linux_dmabuf, ZwpLinuxDmabufV1},
 };
 use wayland_protocols_wlr::screencopy::v1::client::{
     zwlr_screencopy_frame_v1::{self as wlr_frame, ZwlrScreencopyFrameV1},
@@ -78,20 +79,21 @@ pub struct DmabufBuffer {
     pub planes: Vec<Plane>,
     wl_buffer: WlBuffer,
     mapping: std::sync::OnceLock<Mapping>,
+    gbm: Option<alloc::GbmBuffer>,
 }
 
 impl DmabufBuffer {
-    /// CPU view of LINEAR BGRX pixels (mapped once, synced per call).
+    /// CPU view of BGRX pixels. GBM detiles nonlinear buffers before reading.
     pub fn read(&self) -> Result<ReadGuard<'_>> {
-        validate_cpu_read(self.fourcc, self.modifier, self.planes.len()).inspect_err(|e| {
-            tracing::error!(
-                width = self.width,
-                height = self.height,
-                fourcc = self.fourcc,
-                modifier = format_args!("{:#018x}", self.modifier),
-                "CPU capture read refused: {e:#}"
-            );
-        })?;
+        validate_cpu_format(self.fourcc)?;
+        if self.modifier != alloc::MOD_LINEAR {
+            return self
+                .gbm
+                .as_ref()
+                .context("nonlinear CPU read requires a GBM buffer")?
+                .read(self.width, self.height);
+        }
+        validate_cpu_read(self.fourcc, self.modifier, self.planes.len())?;
         let p = &self.planes[0];
         let len = p.offset as usize + p.stride as usize * self.height as usize;
         let map = match self.mapping.get() {
@@ -292,7 +294,7 @@ struct Constraints {
     width: u32,
     height: u32,
     fourcc: u32,
-    /// Empty or INVALID: implicit negotiation (wlr-screencopy carries no modifier list).
+    /// The compositor's offers. An empty list or INVALID alone allows implicit allocation.
     modifiers: Vec<u64>,
 }
 
@@ -347,10 +349,8 @@ fn validate_cpu_read(fourcc: u32, modifier: u64, plane_count: usize) -> Result<(
 
 fn select_format(formats: &[(u32, Vec<u64>)], memory: Memory) -> Option<&(u32, Vec<u64>)> {
     PREFERRED_FORMATS.iter().find_map(|fourcc| {
-        formats.iter().find(|(format, modifiers)| {
-            format == fourcc
-                && (memory == Memory::Gpu
-                    || (validate_cpu_format(*format).is_ok() && alloc::supports_linear(modifiers)))
+        formats.iter().find(|(format, _)| {
+            format == fourcc && (memory == Memory::Gpu || validate_cpu_format(*format).is_ok())
         })
     })
 }
@@ -359,6 +359,7 @@ struct State {
     outputs: Vec<(wl_output::WlOutput, Option<String>)>,
     output: Option<wl_output::WlOutput>,
     dmabuf: ZwpLinuxDmabufV1,
+    dmabuf_formats: DmabufFormats,
     ext_mgr: Option<ExtImageCopyCaptureManagerV1>,
     ext_src_mgr: Option<ExtOutputImageCaptureSourceManagerV1>,
     wlr_mgr: Option<ZwlrScreencopyManagerV1>,
@@ -396,7 +397,9 @@ impl State {
         Ok(Self {
             outputs,
             output: None,
-            dmabuf: globals.bind(qh, 3..=5, ()).context("zwp_linux_dmabuf_v1")?,
+            // Version 4 and later omit the format and modifier events used by wlr capture.
+            dmabuf: globals.bind(qh, 3..=3, ()).context("zwp_linux_dmabuf_v1")?,
+            dmabuf_formats: DmabufFormats::default(),
             ext_mgr: globals.bind(qh, 1..=1, ()).ok(),
             ext_src_mgr: globals.bind(qh, 1..=1, ()).ok(),
             wlr_mgr: globals.bind(qh, 3..=3, ()).ok(),
@@ -472,6 +475,7 @@ impl State {
             fourcc: c.fourcc,
             modifier: alloc.modifier,
             planes: alloc.planes,
+            gbm: alloc.gbm,
             wl_buffer,
             mapping: Default::default(),
         });
@@ -615,8 +619,13 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, ()> for State {
                     tracing::error!(
                         ?formats,
                         memory = ?state.alloc.memory,
-                        "no supported dmabuf format offered; CPU capture requires LINEAR XR24 or AR24"
+                        "no supported dmabuf format offered"
                     );
+                    if state.alloc.memory == Memory::System {
+                        tracing::error!(
+                            "CPU capture requires XR24 or AR24; LINEAR allows fast system memory reads"
+                        );
+                    }
                     state.stopped = true;
                     return;
                 };
@@ -698,17 +707,24 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for State {
                 width,
                 height,
             } => {
-                state.pending.push((format, Vec::new()));
+                state.pending.push(state.dmabuf_formats.offer(format));
                 state.pending_size = (width, height);
             }
             wlr_frame::Event::BufferDone => {
                 let formats = std::mem::take(&mut state.pending);
-                let Some(&(fourcc, _)) = select_format(&formats, state.alloc.memory) else {
+                let Some((fourcc, modifiers)) =
+                    select_format(&formats, state.alloc.memory).cloned()
+                else {
                     tracing::error!(
                         ?formats,
                         memory = ?state.alloc.memory,
-                        "no supported dmabuf format offered; CPU capture requires LINEAR XR24 or AR24"
+                        "no supported dmabuf format offered"
                     );
+                    if state.alloc.memory == Memory::System {
+                        tracing::error!(
+                            "CPU capture requires XR24 or AR24; LINEAR allows fast system memory reads"
+                        );
+                    }
                     state.stopped = true;
                     return;
                 };
@@ -717,7 +733,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for State {
                     width,
                     height,
                     fourcc,
-                    modifiers: Vec::new(),
+                    modifiers,
                 });
                 match state.take_buffer(qh) {
                     Ok(buffer) => {
@@ -769,7 +785,47 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for State {
     }
 }
 
-delegate_noop!(State: ignore ZwpLinuxDmabufV1);
+#[derive(Default)]
+struct DmabufFormats(HashMap<u32, Vec<u64>>);
+
+impl DmabufFormats {
+    fn event(&mut self, event: linux_dmabuf::Event) {
+        match event {
+            linux_dmabuf::Event::Format { format } => {
+                self.0.entry(format).or_default();
+            }
+            linux_dmabuf::Event::Modifier {
+                format,
+                modifier_hi,
+                modifier_lo,
+            } => {
+                let modifier = ((modifier_hi as u64) << 32) | modifier_lo as u64;
+                let modifiers = self.0.entry(format).or_default();
+                if !modifiers.contains(&modifier) {
+                    modifiers.push(modifier);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn offer(&self, format: u32) -> (u32, Vec<u64>) {
+        (format, self.0.get(&format).cloned().unwrap_or_default())
+    }
+}
+
+impl Dispatch<ZwpLinuxDmabufV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &ZwpLinuxDmabufV1,
+        event: linux_dmabuf::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        state.dmabuf_formats.event(event);
+    }
+}
 delegate_noop!(State: ignore ZwpLinuxBufferParamsV1);
 delegate_noop!(State: ignore WlBuffer);
 delegate_noop!(State: ExtImageCopyCaptureManagerV1);
@@ -789,11 +845,74 @@ mod tests {
     const TILED: u64 = 0x0100_0000_0000_0001;
 
     #[test]
-    fn cpu_selection_skips_tiled_formats() {
+    fn both_protocols_use_the_offered_allocation_and_import_paths() {
+        use alloc::{AllocationPath, allocation_path, import_modifier};
+        for modifiers in [vec![TILED], vec![MOD_INVALID], vec![]] {
+            let mut advertised = DmabufFormats::default();
+            advertised.event(linux_dmabuf::Event::Format { format: XR24 });
+            for &modifier in &modifiers {
+                advertised.event(linux_dmabuf::Event::Modifier {
+                    format: XR24,
+                    modifier_hi: (modifier >> 32) as u32,
+                    modifier_lo: modifier as u32,
+                });
+            }
+            advertised.event(linux_dmabuf::Event::Modifier {
+                format: AR24,
+                modifier_hi: 0,
+                modifier_lo: 0,
+            });
+            let ext_offers = vec![(XR24, modifiers.clone())];
+            let wlr_offers = vec![advertised.offer(XR24)];
+            for (protocol, offers) in [
+                (Protocol::ExtImageCopyCapture, ext_offers),
+                (Protocol::WlrScreencopy, wlr_offers),
+            ] {
+                for memory in [Memory::System, Memory::Gpu] {
+                    let (format, offered) = select_format(&offers, memory).unwrap();
+                    assert_eq!(*format, XR24, "{protocol:?}");
+                    assert_eq!(offered, &modifiers, "{protocol:?}");
+                    let (path, actual, imported) = if modifiers == [TILED] {
+                        (AllocationPath::GbmExplicit(vec![TILED]), TILED, TILED)
+                    } else if memory == Memory::System {
+                        (
+                            AllocationPath::Udmabuf,
+                            MOD_LINEAR,
+                            if modifiers.is_empty() {
+                                MOD_LINEAR
+                            } else {
+                                MOD_INVALID
+                            },
+                        )
+                    } else {
+                        (
+                            AllocationPath::GbmImplicit,
+                            TILED,
+                            if modifiers.is_empty() {
+                                TILED
+                            } else {
+                                MOD_INVALID
+                            },
+                        )
+                    };
+                    assert_eq!(allocation_path(memory, offered), path, "{protocol:?}");
+                    assert_eq!(import_modifier(actual, offered), imported, "{protocol:?}");
+                }
+            }
+        }
+        assert_eq!(DmabufFormats::default().offer(XR24), (XR24, vec![]));
+        assert_eq!(
+            import_modifier(TILED, &[MOD_INVALID, MOD_LINEAR]),
+            MOD_INVALID
+        );
+    }
+
+    #[test]
+    fn cpu_selection_accepts_tiled_formats() {
         let formats = vec![(XR24, vec![TILED]), (AR24, vec![TILED, MOD_LINEAR])];
-        assert_eq!(select_format(&formats, Memory::System), Some(&formats[1]));
+        assert_eq!(select_format(&formats, Memory::System), Some(&formats[0]));
         assert_eq!(select_format(&formats, Memory::Gpu), Some(&formats[0]));
-        assert!(select_format(&formats[..1], Memory::System).is_none());
+        assert!(select_format(&formats[..1], Memory::System).is_some());
     }
 
     #[test]
@@ -818,7 +937,7 @@ mod tests {
             (XR24, vec![TILED]),
             (XR24, vec![MOD_LINEAR]),
         ];
-        assert_eq!(select_format(&formats, Memory::System), Some(&formats[2]));
+        assert_eq!(select_format(&formats, Memory::System), Some(&formats[1]));
         assert!(select_format(&[], Memory::System).is_none());
         assert!(select_format(&[(0, vec![MOD_LINEAR])], Memory::Gpu).is_none());
     }

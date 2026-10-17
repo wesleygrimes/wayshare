@@ -1,5 +1,5 @@
-//! CPU frames for Standard (non-HP) mode: captures into system memory and diffs each frame
-//! against the last one while converting to `source::Frame` pixels.
+//! CPU frames for Standard (non-HP) mode. Uses system memory for linear offers and GBM
+//! for tiled offers. Converts to `source::Frame` pixels while finding changed rows.
 
 use std::time::Duration;
 
@@ -77,34 +77,44 @@ impl CaptureSource {
             };
         }
 
-        self.dirty.clear();
         let guard = buf.read()?;
-        let mut run: Option<Rect> = None;
-        for y in 0..h {
-            let src = guard.row(y, w * 4).as_chunks::<4>().0;
-            let dst = &mut self.frame.pixels[y * w..(y + 1) * w];
-            let span = copy_row(dst, src, resized);
-            match (span, &mut run) {
-                (Some((x0, x1)), Some(r)) => {
-                    let right = (r.x + r.width).max(x1 as u32);
-                    r.x = r.x.min(x0 as u32);
-                    r.width = right - r.x;
-                    r.height += 1;
-                }
-                (Some((x0, x1)), None) => {
-                    run = Some(Rect {
-                        x: x0 as u32,
-                        y: y as u32,
-                        width: (x1 - x0) as u32,
-                        height: 1,
-                    });
-                }
-                (None, _) => self.dirty.extend(run.take()),
-            }
-        }
-        self.dirty.extend(run);
+        copy_frame(&mut self.frame, &mut self.dirty, &guard, resized);
         Ok(!self.dirty.is_empty())
     }
+}
+
+fn copy_frame(
+    frame: &mut Frame,
+    dirty: &mut Vec<Rect>,
+    guard: &super::ReadGuard<'_>,
+    resized: bool,
+) {
+    let (w, h) = (frame.width as usize, frame.height as usize);
+    dirty.clear();
+    let mut run: Option<Rect> = None;
+    for y in 0..h {
+        let src = guard.row(y, w * 4).as_chunks::<4>().0;
+        let dst = &mut frame.pixels[y * w..(y + 1) * w];
+        let span = copy_row(dst, src, resized);
+        match (span, &mut run) {
+            (Some((x0, x1)), Some(r)) => {
+                let right = (r.x + r.width).max(x1 as u32);
+                r.x = r.x.min(x0 as u32);
+                r.width = right - r.x;
+                r.height += 1;
+            }
+            (Some((x0, x1)), None) => {
+                run = Some(Rect {
+                    x: x0 as u32,
+                    y: y as u32,
+                    width: (x1 - x0) as u32,
+                    height: 1,
+                });
+            }
+            (None, _) => dirty.extend(run.take()),
+        }
+    }
+    dirty.extend(run);
 }
 
 /// Converts XRGB8888 into `0x00RRGGBB`, returning the changed column range `[x0, x1)`.
@@ -140,5 +150,43 @@ impl FrameSource for CaptureSource {
 
     fn frame(&self) -> &Frame {
         &self.frame
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn padded_stripe_frame_converts_exact_pixels() {
+        let (width, height, stride) = (7, 6, 64);
+        let colors = [0x00123456u32, 0x00abcdef, 0x00ff0080];
+        let mut bytes = vec![0xe7; stride * height];
+        let mut expected = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                let pixel = colors[(x + y) % colors.len()];
+                let offset = y * stride + x * 4;
+                bytes[offset..offset + 4].copy_from_slice(&(pixel | 0xff000000).to_le_bytes());
+                expected.push(pixel);
+            }
+        }
+        let guard = super::super::ReadGuard::owned(bytes, stride);
+        let mut frame = Frame {
+            width: width as u16,
+            height: height as u16,
+            pixels: vec![0; width * height],
+        };
+        let mut dirty = Vec::new();
+        copy_frame(&mut frame, &mut dirty, &guard, true);
+        assert_eq!(frame.pixels, expected);
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(
+            (dirty[0].x, dirty[0].y, dirty[0].width, dirty[0].height),
+            (0, 0, width as u32, height as u32)
+        );
+        copy_frame(&mut frame, &mut dirty, &guard, false);
+        assert!(dirty.is_empty());
+        assert_eq!(frame.pixels, expected);
     }
 }
