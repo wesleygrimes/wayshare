@@ -18,7 +18,8 @@ use crate::rfb::session::canonical_ip;
 use crate::rfb::{CursorSourceFactory, FrameSourceFactory, SessionId};
 use crate::source::{CursorImage, CursorSource, Frame, FrameSource};
 
-/// Picks the encoder backend before the capturer exists; the capturer reports the node it uses.
+/// Picks the encoder backend before the capturer exists. HP sessions pick again on the
+/// capturer's node if it can't run the backend.
 const RENDER_NODE: &str = "/dev/dri/renderD128";
 
 /// The encoder HP sessions will use, or why there is none.

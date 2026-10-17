@@ -196,22 +196,31 @@ pub(super) fn run_media(p: MediaParams, stop: &AtomicBool) -> Result<()> {
         "HP media socket ready"
     );
 
-    let backend = EncoderBackend::auto(std::path::Path::new(RENDER_NODE), &p.encoder);
-    let mut cap = Capturer::with_options(
-        p.output.as_deref(),
-        crate::capture::CaptureOptions {
-            memory: backend.capture_memory(),
-            ..Default::default()
-        },
-    )?;
-    let first = loop {
-        if stop.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        if let Some(f) = cap.next_frame(Some(Duration::from_millis(500)))? {
-            break f;
-        }
+    let mut backend = EncoderBackend::auto(std::path::Path::new(RENDER_NODE), &p.encoder);
+    let mut cap = open_capturer(p.output.as_deref(), backend)?;
+    let Some(mut first) = first_frame(&mut cap, stop)? else {
+        return Ok(());
     };
+    // The capture node is final after the first frame and may be a different GPU.
+    let usable = backend.check(cap.render_node()).is_ok();
+    if repick_backend(p.encoder.backend.is_some(), usable) {
+        let picked = EncoderBackend::auto(cap.render_node(), &p.encoder);
+        warn!(
+            from = ?backend,
+            to = ?picked,
+            node = %cap.render_node().display(),
+            "HP encoder backend unusable on the capture GPU; picking again"
+        );
+        if picked.capture_memory() != backend.capture_memory() {
+            drop(first);
+            cap = open_capturer(p.output.as_deref(), picked)?;
+            first = match first_frame(&mut cap, stop)? {
+                Some(f) => f,
+                None => return Ok(()),
+            };
+        }
+        backend = picked;
+    }
     let (w, h) = (first.buffer.width, first.buffer.height);
     ensure!(
         (w, h) == p.stream_size,
@@ -221,6 +230,7 @@ pub(super) fn run_media(p: MediaParams, stop: &AtomicBool) -> Result<()> {
     let mut enc: Encoder = backend.open(cap.render_node(), w, h, &p.encoder)?;
     info!(
         ?backend,
+        node = %cap.render_node().display(),
         skip_unchanged = p.encoder.skip_unchanged,
         "HP encoder backend"
     );
@@ -291,6 +301,34 @@ pub(super) fn run_media(p: MediaParams, stop: &AtomicBool) -> Result<()> {
     drop(enc);
     let _ = send_thread.join();
     r
+}
+
+fn open_capturer(output: Option<&str>, backend: EncoderBackend) -> Result<Capturer> {
+    Capturer::with_options(
+        output,
+        crate::capture::CaptureOptions {
+            memory: backend.capture_memory(),
+            ..Default::default()
+        },
+    )
+}
+
+/// `None` if `stop` was set first.
+fn first_frame(cap: &mut Capturer, stop: &AtomicBool) -> Result<Option<crate::capture::Frame>> {
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        if let Some(f) = cap.next_frame(Some(Duration::from_millis(500)))? {
+            return Ok(Some(f));
+        }
+    }
+}
+
+/// Whether to run `EncoderBackend::auto` again on the capture node. A forced backend is kept
+/// and fails later if it can't run there.
+fn repick_backend(forced: bool, usable_on_capture_node: bool) -> bool {
+    !forced && !usable_on_capture_node
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -484,5 +522,18 @@ fn drain_rtcp(
             }
             Err(e) => warn!("RTCP parse failed: {e:#}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repick_only_auto_backend_unusable_on_capture_node() {
+        assert!(repick_backend(false, false));
+        assert!(!repick_backend(false, true));
+        assert!(!repick_backend(true, false));
+        assert!(!repick_backend(true, true));
     }
 }
