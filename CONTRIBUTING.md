@@ -8,8 +8,8 @@ from logs. Report security problems privately; see [SECURITY.md](SECURITY.md).
 
 ## Pull requests
 
-Pull requests are welcome from anyone. For anything bigger than a small fix, open an issue
-first so we can agree on the approach before you write the code.
+Anyone can open a pull request. For anything bigger than a small fix, open an issue first
+so we can agree on the approach.
 
 ## Branches and commits
 
@@ -45,13 +45,13 @@ purpose. Say which checks you could not run. Writing follows the rules in
 
 ## Contributors
 
-Help is credited in the README with [all-contributors](https://allcontributors.org).
-On a pull request or issue, comment:
+The README credits contributors with [all-contributors](https://allcontributors.org). To
+add someone, comment on their pull request or issue:
 
 ```text
 @all-contributors please add @username for code
 ```
 
-Use the right [emoji key](https://allcontributors.org/docs/en/emoji-key) type (`code`,
-`doc`, `bug`, `ideas`, and so on). The bot opens a small follow-up pull request that
-updates the contributor table.
+Pick the contribution type from the [emoji key](https://allcontributors.org/docs/en/emoji-key),
+such as `code`, `doc`, `bug`, or `ideas`. The bot opens a pull request that updates the
+table.

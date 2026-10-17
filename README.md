@@ -97,8 +97,7 @@ stay in your config directory (usually `~/.config/wayshare`) until you delete it
 
 ## Contributors
 
-Thanks to these people
-([emoji key](https://allcontributors.org/docs/en/emoji-key)):
+Thanks to these people ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <!-- prettier-ignore-start -->
@@ -118,7 +117,7 @@ Thanks to these people
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
 This project follows the [all-contributors](https://allcontributors.org) specification.
-Contributions of any kind are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+To contribute, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Support
 
