@@ -10,7 +10,29 @@ use gbm::{BufferObjectFlags, Device, Format, Modifier};
 use super::Plane;
 
 const DEFAULT_NODE: &str = "/dev/dri/renderD128";
-const MOD_LINEAR: u64 = 0;
+pub(super) const MOD_LINEAR: u64 = 0;
+pub(super) const MOD_INVALID: u64 = 0x00ff_ffff_ffff_ffff;
+
+fn explicit_modifiers(modifiers: &[u64]) -> Option<&[u64]> {
+    if modifiers.is_empty() || modifiers.contains(&MOD_INVALID) {
+        None
+    } else {
+        Some(modifiers)
+    }
+}
+
+pub(super) fn supports_linear(modifiers: &[u64]) -> bool {
+    explicit_modifiers(modifiers).is_none() || modifiers.contains(&MOD_LINEAR)
+}
+
+pub(super) fn import_modifier(modifier: u64, offered: &[u64]) -> u64 {
+    // Keep the import implicit when the compositor did not offer the actual layout.
+    if offered.contains(&MOD_INVALID) && !offered.contains(&modifier) {
+        MOD_INVALID
+    } else {
+        modifier
+    }
+}
 
 /// Where capture buffers live.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -19,7 +41,7 @@ pub enum Memory {
     #[default]
     Gpu,
     /// Cached system RAM via udmabuf, LINEAR. Fast CPU reads; the compositor and VAAPI still
-    /// import it as a dmabuf. Falls back to `Gpu` if LINEAR isn't offered.
+    /// import it as a dmabuf. Requires LINEAR or implicit modifier support.
     System,
 }
 
@@ -73,7 +95,7 @@ impl Allocator {
         Ok(())
     }
 
-    /// Empty `modifiers` lets the driver choose (implicit modifier).
+    /// Empty `modifiers` or INVALID lets the driver choose an implicit modifier.
     pub fn allocate(
         &mut self,
         width: u32,
@@ -81,17 +103,17 @@ impl Allocator {
         fourcc: u32,
         modifiers: &[u64],
     ) -> Result<Allocation> {
-        if self.memory == Memory::System
-            && (modifiers.is_empty() || modifiers.contains(&MOD_LINEAR))
-        {
+        if self.memory == Memory::System {
+            super::validate_cpu_format(fourcc)?;
+            if !supports_linear(modifiers) {
+                tracing::error!(?modifiers, "CPU capture requires LINEAR buffers");
+                bail!("CPU capture requires LINEAR buffers; offered modifiers: {modifiers:#x?}");
+            }
             return self.allocate_udmabuf(width, height);
         }
         let format = Format::try_from(fourcc).context("unknown fourcc")?;
         let flags = BufferObjectFlags::RENDERING;
-        let bo = if modifiers.is_empty() {
-            self.gbm
-                .create_buffer_object::<()>(width, height, format, flags)?
-        } else {
+        let bo = if let Some(modifiers) = explicit_modifiers(modifiers) {
             self.gbm.create_buffer_object_with_modifiers2::<()>(
                 width,
                 height,
@@ -99,6 +121,9 @@ impl Allocator {
                 modifiers.iter().map(|&m| Modifier::from(m)),
                 flags,
             )?
+        } else {
+            self.gbm
+                .create_buffer_object::<()>(width, height, format, flags)?
         };
         let planes = (0..bo.plane_count() as i32)
             .map(|i| {
@@ -210,4 +235,39 @@ fn render_node_for(dev: u64) -> Result<PathBuf> {
         }
     }
     bail!("no render node for dev {dev:#x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TILED: u64 = 0x0100_0000_0000_0001;
+
+    #[test]
+    fn invalid_and_empty_modifiers_use_implicit_allocation() {
+        for modifiers in [&[][..], &[MOD_INVALID], &[TILED, MOD_INVALID, MOD_LINEAR]] {
+            assert_eq!(explicit_modifiers(modifiers), None);
+            assert!(supports_linear(modifiers));
+        }
+    }
+
+    #[test]
+    fn explicit_modifiers_keep_the_offered_layouts() {
+        for modifiers in [&[MOD_LINEAR][..], &[TILED], &[TILED, MOD_LINEAR]] {
+            assert_eq!(explicit_modifiers(modifiers), Some(modifiers));
+            assert_eq!(supports_linear(modifiers), modifiers.contains(&MOD_LINEAR));
+        }
+    }
+
+    #[test]
+    fn implicit_import_does_not_require_an_unadvertised_layout() {
+        assert_eq!(import_modifier(MOD_LINEAR, &[MOD_INVALID]), MOD_INVALID);
+        assert_eq!(import_modifier(TILED, &[MOD_INVALID]), MOD_INVALID);
+        assert_eq!(
+            import_modifier(MOD_LINEAR, &[MOD_INVALID, MOD_LINEAR]),
+            MOD_LINEAR
+        );
+        assert_eq!(import_modifier(TILED, &[TILED]), TILED);
+        assert_eq!(import_modifier(MOD_LINEAR, &[]), MOD_LINEAR);
+    }
 }
