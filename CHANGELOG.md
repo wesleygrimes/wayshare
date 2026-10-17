@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.3 - 2026-10-17
+
+### Fixes
+
+- The screen no longer stays black in virtual machines with a virtio-gpu display, such as UTM on a Mac. wayshare now captures through shared memory there. Thanks @kitknox. ([#12](https://github.com/wesleygrimes/wayshare/pull/12))
+
+### Maintenance
+
+- The README credits Kit Knox as a contributor. ([#14](https://github.com/wesleygrimes/wayshare/pull/14))
+- When a PR title doesn't follow the required format, CI now says how to fix it. ([#15](https://github.com/wesleygrimes/wayshare/pull/15))
+
+**Full changelog**: [v0.1.2...v0.1.3](https://github.com/wesleygrimes/wayshare/compare/v0.1.2...v0.1.3)
+
 ## 0.1.2 - 2026-10-17
 
 ### Fixes
