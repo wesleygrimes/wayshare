@@ -32,6 +32,15 @@
         "bug",
         "ideas"
       ]
+    },
+    {
+      "login": "kitknox",
+      "name": "Kit Knox",
+      "avatar_url": "https://avatars.githubusercontent.com/u/41200331?v=4",
+      "profile": "https://github.com/kitknox",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitType": "docs"
