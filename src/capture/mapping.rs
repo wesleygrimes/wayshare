@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::os::fd::{AsRawFd, OwnedFd};
 
 use anyhow::{Context, Result};
@@ -53,9 +52,9 @@ impl Drop for Mapping {
     }
 }
 
-/// CPU pixels from a synced linear mapping or a copy of GBM's detiled view.
+/// CPU pixels borrowed from a synced linear mapping or GBM's detiled view.
 pub struct ReadGuard<'a> {
-    bytes: Cow<'a, [u8]>,
+    bytes: &'a [u8],
     fd: Option<&'a OwnedFd>,
     pub stride: usize,
 }
@@ -73,22 +72,22 @@ impl<'a> ReadGuard<'a> {
         // it mapped. `sync` above brackets CPU access to the dmabuf.
         let bytes = unsafe { std::slice::from_raw_parts(map.ptr.add(offset), map.len - offset) };
         Ok(Self {
-            bytes: Cow::Borrowed(bytes),
+            bytes,
             fd: Some(fd),
             stride,
         })
     }
 
-    pub(super) fn owned(bytes: Vec<u8>, stride: usize) -> Self {
+    pub(super) fn borrowed(bytes: &'a [u8], stride: usize) -> Self {
         Self {
-            bytes: Cow::Owned(bytes),
+            bytes,
             fd: None,
             stride,
         }
     }
 
     pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+        self.bytes
     }
 
     pub fn row(&self, y: usize, width_bytes: usize) -> &[u8] {

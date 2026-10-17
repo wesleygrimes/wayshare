@@ -180,12 +180,16 @@ impl<B: Backend> Tiles<B> {
             (Some(c), _) => (0..TILE_COUNT)
                 .filter(|&t| c[t])
                 .fold(0u8, |m, t| m | 1 << t),
-            (None, Some(d)) => {
-                let c = d.diff(b)?;
-                (0..TILE_COUNT)
+            (None, Some(d)) => match d.diff(b) {
+                Ok(c) => (0..TILE_COUNT)
                     .filter(|&t| c[t])
-                    .fold(0u8, |m, t| m | 1 << t)
-            }
+                    .fold(0u8, |m, t| m | 1 << t),
+                Err(e) => {
+                    tracing::warn!("GPU tile diff failed, using compositor damage: {e:#}");
+                    self.differ = None;
+                    self.layout.tiles_touched(&frame.damage)
+                }
+            },
             (None, None) => self.layout.tiles_touched(&frame.damage),
         };
         timings.diff = t0.elapsed();

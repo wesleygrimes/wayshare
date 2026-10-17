@@ -83,17 +83,17 @@ pub struct DmabufBuffer {
 }
 
 impl DmabufBuffer {
-    /// CPU view of BGRX pixels. GBM detiles nonlinear buffers before reading.
-    pub fn read(&self) -> Result<ReadGuard<'_>> {
+    /// Consumes BGRX pixels while mapped. GBM detiles nonlinear buffers for the callback.
+    pub fn with_read<T>(&self, read: impl FnOnce(&ReadGuard<'_>) -> T) -> Result<T> {
         validate_cpu_format(self.fourcc)?;
         if self.modifier != alloc::MOD_LINEAR {
             return self
                 .gbm
                 .as_ref()
                 .context("nonlinear CPU read requires a GBM buffer")?
-                .read(self.width, self.height);
+                .with_read(self.width, self.height, read);
         }
-        validate_cpu_read(self.fourcc, self.modifier, self.planes.len())?;
+        validate_cpu_read(self.planes.len())?;
         let p = &self.planes[0];
         let len = p.offset as usize + p.stride as usize * self.height as usize;
         let map = match self.mapping.get() {
@@ -103,7 +103,8 @@ impl DmabufBuffer {
                 self.mapping.get_or_init(|| m)
             }
         };
-        ReadGuard::new(map, &p.fd, p.offset as usize, p.stride as usize)
+        let guard = ReadGuard::new(map, &p.fd, p.offset as usize, p.stride as usize)?;
+        Ok(read(&guard))
     }
 }
 
@@ -230,7 +231,11 @@ impl Capturer {
                     return Ok(Some(frame));
                 }
                 Some(Status::Failed(reason)) => {
+                    let error = self.state.inflight.as_mut().and_then(|f| f.error.take());
                     self.state.abort_frame();
+                    if let Some(error) = error {
+                        return Err(error).context("capture buffer allocation");
+                    }
                     if reason != Some(ext_frame::FailureReason::BufferConstraints) {
                         bail!("capture failed: {reason:?}");
                     }
@@ -316,6 +321,7 @@ struct Inflight {
     /// Not yet attached for wlr until `buffer_done`.
     buffer: Option<Arc<DmabufBuffer>>,
     status: Status,
+    error: Option<anyhow::Error>,
     damage: Vec<Rect>,
     presented: Option<Duration>,
     requested_at: Instant,
@@ -336,11 +342,7 @@ fn validate_cpu_format(fourcc: u32) -> Result<()> {
     Ok(())
 }
 
-fn validate_cpu_read(fourcc: u32, modifier: u64, plane_count: usize) -> Result<()> {
-    if modifier != alloc::MOD_LINEAR {
-        bail!("CPU capture requires a verified LINEAR buffer; got modifier {modifier:#018x}");
-    }
-    validate_cpu_format(fourcc)?;
+fn validate_cpu_read(plane_count: usize) -> Result<()> {
     if plane_count != 1 {
         bail!("CPU capture requires one BGRX plane; got {plane_count}");
     }
@@ -348,6 +350,18 @@ fn validate_cpu_read(fourcc: u32, modifier: u64, plane_count: usize) -> Result<(
 }
 
 fn select_format(formats: &[(u32, Vec<u64>)], memory: Memory) -> Option<&(u32, Vec<u64>)> {
+    if memory == Memory::System {
+        let linear = PREFERRED_FORMATS.iter().find_map(|fourcc| {
+            formats.iter().find(|(format, modifiers)| {
+                format == fourcc
+                    && validate_cpu_format(*format).is_ok()
+                    && alloc::supports_linear(modifiers)
+            })
+        });
+        if linear.is_some() {
+            return linear;
+        }
+    }
     PREFERRED_FORMATS.iter().find_map(|fourcc| {
         formats.iter().find(|(format, _)| {
             format == fourcc && (memory == Memory::Gpu || validate_cpu_format(*format).is_ok())
@@ -397,8 +411,8 @@ impl State {
         Ok(Self {
             outputs,
             output: None,
-            // Version 4 and later omit the format and modifier events used by wlr capture.
-            dmabuf: globals.bind(qh, 3..=3, ()).context("zwp_linux_dmabuf_v1")?,
+            // v2 offers formats without modifiers. v4 omits the events used by wlr capture.
+            dmabuf: globals.bind(qh, 2..=3, ()).context("zwp_linux_dmabuf_v1")?,
             dmabuf_formats: DmabufFormats::default(),
             ext_mgr: globals.bind(qh, 1..=1, ()).ok(),
             ext_src_mgr: globals.bind(qh, 1..=1, ()).ok(),
@@ -435,7 +449,7 @@ impl State {
             .alloc
             .allocate(c.width, c.height, c.fourcc, &c.modifiers)?;
 
-        let import_modifier = alloc::import_modifier(alloc.modifier, &c.modifiers);
+        let import_modifier = alloc::import_modifier(alloc.modifier, &c.modifiers)?;
         let params = self.dmabuf.create_params(qh, ());
         for (i, p) in alloc.planes.iter().enumerate() {
             tracing::debug!(
@@ -502,6 +516,7 @@ impl State {
             frame,
             buffer,
             status: Status::Pending,
+            error: None,
             damage: Vec::new(),
             presented: None,
             requested_at,
@@ -707,7 +722,9 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for State {
                 width,
                 height,
             } => {
-                state.pending.push(state.dmabuf_formats.offer(format));
+                if let Some(offer) = state.dmabuf_formats.offer(format) {
+                    state.pending.push(offer);
+                }
                 state.pending_size = (width, height);
             }
             wlr_frame::Event::BufferDone => {
@@ -743,9 +760,9 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for State {
                         }
                     }
                     Err(e) => {
-                        tracing::error!("capture buffer: {e:#}");
                         if let Some(f) = state.inflight_mut() {
                             f.status = Status::Failed(None);
+                            f.error = Some(e);
                         }
                     }
                 }
@@ -809,8 +826,10 @@ impl DmabufFormats {
         }
     }
 
-    fn offer(&self, format: u32) -> (u32, Vec<u64>) {
-        (format, self.0.get(&format).cloned().unwrap_or_default())
+    fn offer(&self, format: u32) -> Option<(u32, Vec<u64>)> {
+        self.0
+            .get(&format)
+            .map(|modifiers| (format, modifiers.clone()))
     }
 }
 
@@ -863,7 +882,7 @@ mod tests {
                 modifier_lo: 0,
             });
             let ext_offers = vec![(XR24, modifiers.clone())];
-            let wlr_offers = vec![advertised.offer(XR24)];
+            let wlr_offers = vec![advertised.offer(XR24).unwrap()];
             for (protocol, offers) in [
                 (Protocol::ExtImageCopyCapture, ext_offers),
                 (Protocol::WlrScreencopy, wlr_offers),
@@ -875,42 +894,30 @@ mod tests {
                     let (path, actual, imported) = if modifiers == [TILED] {
                         (AllocationPath::GbmExplicit(vec![TILED]), TILED, TILED)
                     } else if memory == Memory::System {
-                        (
-                            AllocationPath::Udmabuf,
-                            MOD_LINEAR,
-                            if modifiers.is_empty() {
-                                MOD_LINEAR
-                            } else {
-                                MOD_INVALID
-                            },
-                        )
+                        (AllocationPath::Udmabuf, MOD_LINEAR, MOD_INVALID)
                     } else {
-                        (
-                            AllocationPath::GbmImplicit,
-                            TILED,
-                            if modifiers.is_empty() {
-                                TILED
-                            } else {
-                                MOD_INVALID
-                            },
-                        )
+                        (AllocationPath::GbmImplicit, TILED, MOD_INVALID)
                     };
                     assert_eq!(allocation_path(memory, offered), path, "{protocol:?}");
-                    assert_eq!(import_modifier(actual, offered), imported, "{protocol:?}");
+                    assert_eq!(
+                        import_modifier(actual, offered).unwrap(),
+                        imported,
+                        "{protocol:?}"
+                    );
                 }
             }
         }
-        assert_eq!(DmabufFormats::default().offer(XR24), (XR24, vec![]));
+        assert_eq!(DmabufFormats::default().offer(XR24), None);
         assert_eq!(
-            import_modifier(TILED, &[MOD_INVALID, MOD_LINEAR]),
+            import_modifier(TILED, &[MOD_INVALID, MOD_LINEAR]).unwrap(),
             MOD_INVALID
         );
     }
 
     #[test]
-    fn cpu_selection_accepts_tiled_formats() {
-        let formats = vec![(XR24, vec![TILED]), (AR24, vec![TILED, MOD_LINEAR])];
-        assert_eq!(select_format(&formats, Memory::System), Some(&formats[0]));
+    fn cpu_selection_prefers_linear_formats_before_tiled_formats() {
+        let formats = vec![(XR24, vec![TILED]), (AR24, vec![MOD_LINEAR])];
+        assert_eq!(select_format(&formats, Memory::System), Some(&formats[1]));
         assert_eq!(select_format(&formats, Memory::Gpu), Some(&formats[0]));
         assert!(select_format(&formats[..1], Memory::System).is_some());
     }
@@ -937,30 +944,20 @@ mod tests {
             (XR24, vec![TILED]),
             (XR24, vec![MOD_LINEAR]),
         ];
-        assert_eq!(select_format(&formats, Memory::System), Some(&formats[1]));
+        assert_eq!(select_format(&formats, Memory::System), Some(&formats[2]));
         assert!(select_format(&[], Memory::System).is_none());
         assert!(select_format(&[(0, vec![MOD_LINEAR])], Memory::Gpu).is_none());
     }
 
     #[test]
-    fn cpu_reads_require_verified_linear_layout() {
-        for format in [XR24, AR24] {
-            assert!(validate_cpu_read(format, MOD_LINEAR, 1).is_ok());
-            for modifier in [MOD_INVALID, TILED, u64::MAX] {
-                let err = validate_cpu_read(format, modifier, 1).unwrap_err();
-                assert!(err.to_string().contains("verified LINEAR"));
-            }
-        }
-    }
-
-    #[test]
     fn cpu_reads_reject_unsupported_formats_and_plane_counts() {
         for format in [XB24, AB24, u32::from_le_bytes(*b"NV12"), 0] {
-            let err = validate_cpu_read(format, MOD_LINEAR, 1).unwrap_err();
+            let err = validate_cpu_format(format).unwrap_err();
             assert!(err.to_string().contains("XR24 or AR24"));
         }
+        assert!(validate_cpu_read(1).is_ok());
         for planes in [0, 2] {
-            assert!(validate_cpu_read(XR24, MOD_LINEAR, planes).is_err());
+            assert!(validate_cpu_read(planes).is_err());
         }
     }
 }

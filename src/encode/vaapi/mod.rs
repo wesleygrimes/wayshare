@@ -180,7 +180,7 @@ struct Session {
     coded: [VABufferID; FLIGHT * TILE_COUNT],
     free_slots: Vec<usize>,
     collector: Option<Collector>,
-    /// Fused change detection + conversion into `inputs` (None: TileDiffer + VPP path).
+    /// Fused change detection + conversion into `inputs` (None: VPP path).
     fused: Option<crate::capture::TileDiffer>,
     /// Slot already filled by `detect` for the next `submit`.
     prepared: Option<usize>,
@@ -797,21 +797,18 @@ impl Backend for Session {
             Some(s) => s,
             None => self.take_slot()?,
         };
-        match self
+        let result = self
             .fused
             .as_mut()
             .unwrap()
-            .diff_convert(&frame.buffer, slot)
-        {
-            Ok(changed) => {
-                self.prepared = Some(slot);
-                Ok(Some(changed))
-            }
-            Err(e) => {
-                self.free_slots.push(slot);
-                Err(e)
-            }
-        }
+            .diff_convert(&frame.buffer, slot);
+        Ok(finish_detection(
+            &mut self.fused,
+            &mut self.prepared,
+            &mut self.free_slots,
+            slot,
+            result,
+        ))
     }
 
     fn submit(&mut self, frame: &Frame, pics: &[TilePic], mut meta: EncodedFrame) -> Result<()> {
@@ -916,6 +913,55 @@ impl Backend for Session {
         self.trim.set_target(bps);
         self.send_rate = true;
         false
+    }
+}
+
+// A compositor can select a layout EGL cannot import (for example, auxiliary compression
+// planes). Release the unused conversion slot and let submit import it through VA/VPP.
+fn finish_detection<T>(
+    fused: &mut Option<T>,
+    prepared: &mut Option<usize>,
+    free_slots: &mut Vec<usize>,
+    slot: usize,
+    result: Result<[bool; TILE_COUNT]>,
+) -> Option<[bool; TILE_COUNT]> {
+    match result {
+        Ok(changed) => {
+            *prepared = Some(slot);
+            Some(changed)
+        }
+        Err(e) => {
+            tracing::warn!("fused diff+convert failed, using VPP: {e:#}");
+            *fused = None;
+            *prepared = None;
+            free_slots.push(slot);
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_fused_import_releases_slot_for_vpp() {
+        let mut fused = Some(());
+        let mut prepared = None;
+        let mut free = vec![0];
+        let changed = finish_detection(
+            &mut fused,
+            &mut prepared,
+            &mut free,
+            1,
+            Err(anyhow::anyhow!("diff supports single-plane buffers only")),
+        );
+        assert!(changed.is_none());
+        assert!(fused.is_none());
+        // submit sees no converted surface and can take the released slot for VPP.
+        assert!(prepared.is_none());
+        assert_eq!(free, [0, 1]);
+        assert_eq!(free.pop(), Some(1));
     }
 }
 

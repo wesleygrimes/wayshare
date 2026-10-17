@@ -282,13 +282,13 @@ mod bench {
             }
             if readback {
                 let t = Instant::now();
-                let g = frame.buffer.read()?;
                 let row_bytes = frame.buffer.width as usize * 4;
                 let mut cur = vec![0u8; row_bytes * frame.buffer.height as usize];
-                for y in 0..frame.buffer.height as usize {
-                    cur[y * row_bytes..][..row_bytes].copy_from_slice(g.row(y, row_bytes));
-                }
-                drop(g);
+                frame.buffer.with_read(|g| {
+                    for y in 0..frame.buffer.height as usize {
+                        cur[y * row_bytes..][..row_bytes].copy_from_slice(g.row(y, row_bytes));
+                    }
+                })?;
                 copy_ms.push(t.elapsed().as_secs_f64() * 1e3);
                 let t = Instant::now();
                 let n = (cur == prev) as usize;

@@ -77,8 +77,7 @@ impl CaptureSource {
             };
         }
 
-        let guard = buf.read()?;
-        copy_frame(&mut self.frame, &mut self.dirty, &guard, resized);
+        buf.with_read(|guard| copy_frame(&mut self.frame, &mut self.dirty, guard, resized))?;
         Ok(!self.dirty.is_empty())
     }
 }
@@ -171,7 +170,7 @@ mod tests {
                 expected.push(pixel);
             }
         }
-        let guard = super::super::ReadGuard::owned(bytes, stride);
+        let guard = super::super::ReadGuard::borrowed(&bytes, stride);
         let mut frame = Frame {
             width: width as u16,
             height: height as u16,

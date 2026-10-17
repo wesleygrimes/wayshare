@@ -282,53 +282,53 @@ impl Session {
 
     /// Converts the requested tiles in parallel, one thread per tile.
     fn convert(&mut self, frame: &Frame, pics: &[TilePic]) -> Result<()> {
-        let guard = frame.buffer.read()?;
-        let (src, stride) = (guard.bytes(), guard.stride);
-        let (l, chroma, k, strides) = (self.layout, self.cfg.chroma, self.coeffs, self.strides);
-        std::thread::scope(|s| {
-            for (t, buf) in self.bufs.iter_mut().enumerate() {
-                if !pics.iter().any(|p| p.tile == t) {
-                    continue;
-                }
-                s.spawn(move || {
-                    let (w, rows, th) = (
-                        l.width as usize,
-                        l.tile_rows(t) as usize,
-                        l.tile_height as usize,
-                    );
-                    let [y, u, v] = &mut buf.planes;
-                    bgrx_to_yuv(
-                        &src[l.tile_y(t) as usize * stride..],
-                        stride,
-                        w,
-                        rows,
-                        chroma,
-                        &k,
-                        Planes {
-                            y,
-                            u,
-                            v,
-                            y_stride: strides[0],
-                            c_stride: strides[1],
-                        },
-                    );
-                    if rows < th {
-                        let (crows, cth) = match chroma {
-                            Chroma::Yuv444 => (rows, th),
-                            Chroma::Yuv420 => (rows.div_ceil(2), th.div_ceil(2)),
-                        };
-                        for (i, plane) in buf.planes.iter_mut().enumerate() {
-                            let (valid, total) = if i == 0 { (rows, th) } else { (crows, cth) };
-                            let s = strides[i];
-                            for y in valid..total {
-                                plane.copy_within((valid - 1) * s..valid * s, y * s);
+        frame.buffer.with_read(|guard| {
+            let (src, stride) = (guard.bytes(), guard.stride);
+            let (l, chroma, k, strides) = (self.layout, self.cfg.chroma, self.coeffs, self.strides);
+            std::thread::scope(|s| {
+                for (t, buf) in self.bufs.iter_mut().enumerate() {
+                    if !pics.iter().any(|p| p.tile == t) {
+                        continue;
+                    }
+                    s.spawn(move || {
+                        let (w, rows, th) = (
+                            l.width as usize,
+                            l.tile_rows(t) as usize,
+                            l.tile_height as usize,
+                        );
+                        let [y, u, v] = &mut buf.planes;
+                        bgrx_to_yuv(
+                            &src[l.tile_y(t) as usize * stride..],
+                            stride,
+                            w,
+                            rows,
+                            chroma,
+                            &k,
+                            Planes {
+                                y,
+                                u,
+                                v,
+                                y_stride: strides[0],
+                                c_stride: strides[1],
+                            },
+                        );
+                        if rows < th {
+                            let (crows, cth) = match chroma {
+                                Chroma::Yuv444 => (rows, th),
+                                Chroma::Yuv420 => (rows.div_ceil(2), th.div_ceil(2)),
+                            };
+                            for (i, plane) in buf.planes.iter_mut().enumerate() {
+                                let (valid, total) = if i == 0 { (rows, th) } else { (crows, cth) };
+                                let s = strides[i];
+                                for y in valid..total {
+                                    plane.copy_within((valid - 1) * s..valid * s, y * s);
+                                }
                             }
                         }
-                    }
-                });
-            }
-        });
-        Ok(())
+                    });
+                }
+            });
+        })
     }
 
     fn encode_pic(&mut self, p: TilePic) -> Result<EncodedTile> {

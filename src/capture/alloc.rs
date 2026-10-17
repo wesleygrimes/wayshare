@@ -26,12 +26,14 @@ pub(super) fn supports_linear(modifiers: &[u64]) -> bool {
     modifiers.iter().all(|&m| m == MOD_INVALID) || modifiers.contains(&MOD_LINEAR)
 }
 
-pub(super) fn import_modifier(modifier: u64, offered: &[u64]) -> u64 {
-    // Keep the import implicit when the compositor did not offer the actual layout.
-    if offered.contains(&MOD_INVALID) && !offered.contains(&modifier) {
-        MOD_INVALID
+pub(super) fn import_modifier(modifier: u64, offered: &[u64]) -> Result<u64> {
+    if offered.contains(&modifier) {
+        Ok(modifier)
+    } else if offered.is_empty() || offered.contains(&MOD_INVALID) {
+        // A format-only advertisement permits implicit import, not an arbitrary modifier.
+        Ok(MOD_INVALID)
     } else {
-        modifier
+        bail!("allocated modifier {modifier:#018x} was not advertised")
     }
 }
 
@@ -61,11 +63,19 @@ pub(super) struct GbmBuffer {
 }
 
 impl GbmBuffer {
-    pub fn read(&self, width: u32, height: u32) -> Result<super::ReadGuard<'static>> {
+    pub fn with_read<T>(
+        &self,
+        width: u32,
+        height: u32,
+        read: impl FnOnce(&super::ReadGuard<'_>) -> T,
+    ) -> Result<T> {
         let bo = self.bo.lock().unwrap();
-        // GBM detiles into a CPU view. Copy it before the closure unmaps that view.
+        // The callback consumes GBM's detiled view before map returns and unmaps it.
         bo.map(0, 0, width, height, |map| {
-            super::ReadGuard::owned(map.buffer().to_vec(), map.stride() as usize)
+            read(&super::ReadGuard::borrowed(
+                map.buffer(),
+                map.stride() as usize,
+            ))
         })
         .context("gbm_bo_map capture buffer")
     }
@@ -313,20 +323,26 @@ mod tests {
             AllocationPath::GbmExplicit(vec![TILED])
         );
         assert_eq!(
-            import_modifier(TILED, &[MOD_INVALID, MOD_LINEAR]),
+            import_modifier(TILED, &[MOD_INVALID, MOD_LINEAR]).unwrap(),
             MOD_INVALID
         );
     }
 
     #[test]
     fn implicit_import_does_not_require_an_unadvertised_layout() {
-        assert_eq!(import_modifier(MOD_LINEAR, &[MOD_INVALID]), MOD_INVALID);
-        assert_eq!(import_modifier(TILED, &[MOD_INVALID]), MOD_INVALID);
         assert_eq!(
-            import_modifier(MOD_LINEAR, &[MOD_INVALID, MOD_LINEAR]),
+            import_modifier(MOD_LINEAR, &[MOD_INVALID]).unwrap(),
+            MOD_INVALID
+        );
+        assert_eq!(import_modifier(TILED, &[MOD_INVALID]).unwrap(), MOD_INVALID);
+        assert_eq!(
+            import_modifier(MOD_LINEAR, &[MOD_INVALID, MOD_LINEAR]).unwrap(),
             MOD_LINEAR
         );
-        assert_eq!(import_modifier(TILED, &[TILED]), TILED);
-        assert_eq!(import_modifier(MOD_LINEAR, &[]), MOD_LINEAR);
+        assert_eq!(import_modifier(TILED, &[TILED]).unwrap(), TILED);
+        assert_eq!(import_modifier(MOD_LINEAR, &[]).unwrap(), MOD_INVALID);
+        assert_eq!(import_modifier(TILED, &[]).unwrap(), MOD_INVALID);
+        assert!(import_modifier(TILED, &[MOD_LINEAR]).is_err());
+        assert!(import_modifier(MOD_LINEAR, &[TILED]).is_err());
     }
 }
