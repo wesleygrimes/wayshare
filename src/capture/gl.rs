@@ -31,6 +31,35 @@ pub struct PlaneDesc {
     pub modifier: u64,
 }
 
+/// EGL attributes for importing one dmabuf plane. An INVALID modifier means the
+/// layout is implicit, so the modifier attributes are left out.
+fn dmabuf_attribs(p: &PlaneDesc) -> Vec<egl::Attrib> {
+    let mut attribs = vec![
+        egl::WIDTH as egl::Attrib,
+        p.width as egl::Attrib,
+        egl::HEIGHT as egl::Attrib,
+        p.height as egl::Attrib,
+        EGL_LINUX_DRM_FOURCC_EXT,
+        p.fourcc as egl::Attrib,
+        EGL_DMA_BUF_PLANE0_FD_EXT,
+        p.fd as egl::Attrib,
+        EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+        p.offset as egl::Attrib,
+        EGL_DMA_BUF_PLANE0_PITCH_EXT,
+        p.pitch as egl::Attrib,
+    ];
+    if p.modifier != super::alloc::MOD_INVALID {
+        attribs.extend([
+            EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT,
+            (p.modifier & 0xffff_ffff) as egl::Attrib,
+            EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT,
+            (p.modifier >> 32) as egl::Attrib,
+        ]);
+    }
+    attribs.push(egl::ATTRIB_NONE);
+    attribs
+}
+
 pub struct Gl {
     egl: egl::Instance<egl::Static>,
     dpy: egl::Display,
@@ -135,25 +164,7 @@ impl Gl {
 
     /// Wraps one dmabuf plane as a 2D texture (current context required).
     pub fn import(&self, p: &PlaneDesc) -> Result<(egl::Image, glow::Texture)> {
-        let attribs = [
-            egl::WIDTH as egl::Attrib,
-            p.width as egl::Attrib,
-            egl::HEIGHT as egl::Attrib,
-            p.height as egl::Attrib,
-            EGL_LINUX_DRM_FOURCC_EXT,
-            p.fourcc as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_FD_EXT,
-            p.fd as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_OFFSET_EXT,
-            p.offset as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_PITCH_EXT,
-            p.pitch as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT,
-            (p.modifier & 0xffff_ffff) as egl::Attrib,
-            EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT,
-            (p.modifier >> 32) as egl::Attrib,
-            egl::ATTRIB_NONE,
-        ];
+        let attribs = dmabuf_attribs(p);
         let image = self
             .egl
             .create_image(
@@ -204,5 +215,54 @@ impl Drop for Gl {
     fn drop(&mut self) {
         let _ = self.egl.make_current(self.dpy, None, None, None);
         let _ = self.egl.destroy_context(self.dpy, self.ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capture::alloc::{MOD_INVALID, MOD_LINEAR};
+
+    fn plane(modifier: u64) -> PlaneDesc {
+        PlaneDesc {
+            fd: 3,
+            fourcc: 0x3432_5258,
+            width: 64,
+            height: 32,
+            offset: 0,
+            pitch: 256,
+            modifier,
+        }
+    }
+
+    fn has_modifier(attribs: &[egl::Attrib]) -> bool {
+        attribs.iter().step_by(2).any(|&a| {
+            a == EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT || a == EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT
+        })
+    }
+
+    #[test]
+    fn invalid_modifier_imports_implicitly() {
+        let attribs = dmabuf_attribs(&plane(MOD_INVALID));
+        assert!(!has_modifier(&attribs));
+        assert_eq!(attribs.last(), Some(&egl::ATTRIB_NONE));
+    }
+
+    #[test]
+    fn explicit_modifier_is_passed_through() {
+        let tiled = 0x0200_0000_1234_5678;
+        for modifier in [MOD_LINEAR, tiled] {
+            let attribs = dmabuf_attribs(&plane(modifier));
+            let lo = attribs
+                .iter()
+                .position(|&a| a == EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT)
+                .unwrap();
+            let hi = attribs
+                .iter()
+                .position(|&a| a == EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT)
+                .unwrap();
+            assert_eq!(attribs[lo + 1], (modifier & 0xffff_ffff) as egl::Attrib);
+            assert_eq!(attribs[hi + 1], (modifier >> 32) as egl::Attrib);
+        }
     }
 }
