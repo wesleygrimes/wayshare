@@ -13,7 +13,8 @@ Rules for anyone, human or agent, changing wayshare. Setup and build instruction
   narrate obvious code. Explain the invariants around unsafe FFI.
 - Change generated files through their generator (for example `mise run gen-vaapi-sys`),
   not by hand.
-- Use `wes/<task-name>` branches, Conventional Commits, and the mise tasks.
+- Use `wes/<task-name>` branches and the mise tasks. Write commit messages and PR titles as
+  Conventional Commits; CI fails the PR otherwise (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 - Run the checks that fit the change and report what actually ran, including checks that
   could not run on the available machine.
 - Get authorization before external writes (pushes, PRs, releases, repository settings)
