@@ -22,10 +22,14 @@ pub fn run() -> Result<()> {
     let config_path = config_dir()?.join("config.toml");
     let settings = Settings::load(None)?;
 
-    let user = current_user()?;
+    let mut user = current_user()?;
     let srp_path = settings.srp_path()?;
     if settings.srp_file.is_some() {
-        ui::done("Password", &format!("from {}", ui::path(&srp_path)));
+        user = VerifierRecord::load(&srp_path)?.username;
+        ui::done(
+            "Password",
+            &format!("for {user}, from {}", ui::path(&srp_path)),
+        );
     } else if !srp_path.exists()
         || Confirm::new(format!("Change the password for {user}?"))
             .affirmative("Change")
@@ -60,8 +64,11 @@ pub fn run() -> Result<()> {
     ui::done("Config", &format!("saved to {}", ui::path(&config_path)));
 
     ui::spin("Starting wayshare…", || -> Result<()> {
-        // A package's unit in /usr/lib would be shadowed by one written to ~/.local.
-        if !unit_loaded() {
+        // Rewrite our own unit so it follows the binary, but don't shadow a package's unit in
+        // /usr/lib with one in ~/.local.
+        let fragment = crate::service::unit_property("FragmentPath");
+        let ours = crate::service::unit_dir()?.join("wayshare.service");
+        if fragment.is_empty() || Path::new(&fragment) == ours {
             crate::service::install()?;
             systemctl(&["daemon-reload"])?;
         }
@@ -75,7 +82,11 @@ pub fn run() -> Result<()> {
     firewall_step(listen.port(), bound, ip, &addrs)?;
 
     let name = settings.name.clone().unwrap_or_else(hostname);
-    let address = ip.map_or("this machine's IP address".into(), |ip| ip.to_string());
+    let address = match (ip, listen.port()) {
+        (None, _) => "this machine's IP address".into(),
+        (Some(ip), 5900) => ip.to_string(),
+        (Some(ip), port) => format!("{ip}:{port}"),
+    };
     ui::heading("Ready");
     ui::line("On your Mac, open Screen Sharing and choose Connection › New.");
     ui::line(&format!("Address  {}", ui::code(&address)));
@@ -304,13 +315,6 @@ pub fn set_top_level_key(text: &str, key: &str, value: &str) -> String {
     out.join("\n") + "\n"
 }
 
-fn unit_loaded() -> bool {
-    Command::new("systemctl")
-        .args(["--user", "show", "-p", "LoadState", "--value", "wayshare"])
-        .output()
-        .is_ok_and(|o| o.stdout.trim_ascii() == b"loaded")
-}
-
 /// The address other machines on the LAN most likely use for this one.
 pub fn lan_ipv4() -> Option<Ipv4Addr> {
     // connect() on UDP only picks a route and source address; nothing is sent.
@@ -433,7 +437,12 @@ fn ufw_allows(rules: &str, port: u16) -> bool {
             return false;
         }
         let (action, proto, dport) = (w.next(), w.next(), w.next());
-        action == Some("allow") && matches!(proto, Some("tcp" | "any")) && dport == Some(&port)
+        // Then destination, source port, source, and direction (`in`, or `in_<interface>`).
+        let inbound = w.nth(3).is_some_and(|d| d.starts_with("in"));
+        action == Some("allow")
+            && matches!(proto, Some("tcp" | "any"))
+            && dport == Some(&port)
+            && inbound
     })
 }
 
@@ -545,6 +554,18 @@ mod tests {
         ));
         assert!(ufw_allows(
             "### tuple ### allow any 5900 0.0.0.0/0 any 0.0.0.0/0 in\n",
+            5900
+        ));
+        assert!(ufw_allows(
+            "### tuple ### allow tcp 5900 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0\n",
+            5900
+        ));
+        assert!(!ufw_allows(
+            "### tuple ### allow tcp 5900 0.0.0.0/0 any 0.0.0.0/0 out\n",
+            5900
+        ));
+        assert!(ufw_allows(
+            "### tuple ### allow tcp 5900 0.0.0.0/0 any 192.168.1.0/24 in comment=6d6163\n",
             5900
         ));
     }

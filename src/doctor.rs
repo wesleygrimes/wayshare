@@ -109,14 +109,21 @@ pub fn run() -> Result<bool> {
         }
     }
 
+    let set_password = |p: &std::path::Path| match &s.srp_file {
+        Some(_) => format!(
+            "run `wayshare set-password --user NAME --srp-file {}`",
+            p.display()
+        ),
+        None => "run `wayshare set-password`".into(),
+    };
     match s.srp_path() {
-        Ok(p) if !p.exists() => r.fail("Password", "not set", "run `wayshare set-password`"),
+        Ok(p) if !p.exists() => r.fail("Password", "not set", &set_password(&p)),
         Ok(p) => match VerifierRecord::load(&p) {
             Ok(rec) => r.ok(
                 "Password",
                 &format!("set for {} in {}", rec.username, ui::path(&p)),
             ),
-            Err(e) => r.fail("Password", &format!("{e:#}"), "run `wayshare set-password`"),
+            Err(e) => r.fail("Password", &format!("{e:#}"), &set_password(&p)),
         },
         Err(e) => r.fail("Password", &format!("{e:#}"), "set srp_file in config.toml"),
     }

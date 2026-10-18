@@ -1,8 +1,9 @@
 //! The systemd user unit that `wayshare setup` writes for installs without a package, and the
 //! commands that drive it.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use demand::Confirm;
@@ -61,6 +62,15 @@ pub fn systemctl(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// A property of the wayshare unit from `systemctl --user show`, or "" if systemctl fails.
+pub fn unit_property(name: &str) -> String {
+    Command::new("systemctl")
+        .args(["--user", "show", "-p", name, "--value", "wayshare"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
 /// `wayshare start`, `stop` and `restart`.
 pub fn control(verb: &str) -> Result<()> {
     let (doing, done) = match verb {
@@ -106,12 +116,23 @@ pub fn upgrade() -> Result<()> {
             let dir = exe.parent().context("binary has no parent directory")?;
             let old = env!("CARGO_PKG_VERSION");
             ui::spin("Downloading the latest release…", || -> Result<()> {
-                let out = Command::new("sh")
-                    .arg("-c")
-                    .arg(format!("curl -fsSL --proto '=https' {INSTALL_SCRIPT} | sh"))
-                    .env("WAYSHARE_INSTALL_DIR", dir)
+                let script = Command::new("curl")
+                    .args(["-fsSL", "--proto", "=https", INSTALL_SCRIPT])
                     .output()
+                    .context("running curl")?;
+                if !script.status.success() {
+                    let why = String::from_utf8_lossy(&script.stderr);
+                    bail!("downloading the installer failed: {}", why.trim());
+                }
+                let mut sh = Command::new("sh")
+                    .env("WAYSHARE_INSTALL_DIR", dir)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
                     .context("running the installer")?;
+                sh.stdin.take().unwrap().write_all(&script.stdout)?;
+                let out = sh.wait_with_output()?;
                 if !out.status.success() {
                     let why = String::from_utf8_lossy(&out.stderr);
                     bail!("the installer failed: {}", why.trim());
@@ -156,7 +177,11 @@ pub fn uninstall() -> Result<()> {
         return Ok(());
     }
     let exe = std::env::current_exe().context("finding the wayshare binary")?;
-    let _ = systemctl(&["disable", "--now", "wayshare"]);
+    if let Err(e) = systemctl(&["disable", "--now", "wayshare"])
+        && unit_property("LoadState") == "loaded"
+    {
+        return Err(e.context("couldn't stop the service, so nothing was removed"));
+    }
     ui::done("Service", "stopped and disabled");
     let unit = unit_dir()?.join("wayshare.service");
     if unit.exists() {
