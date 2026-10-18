@@ -98,11 +98,7 @@ pub fn run() -> Result<bool> {
     let enabled = systemctl_query("is-enabled");
     let active = systemctl_query("is-active");
     if enabled.is_empty() || enabled == "not-found" {
-        r.fail(
-            "Service",
-            "not installed",
-            "run `wayshare install-service`, then `systemctl --user enable --now wayshare`",
-        );
+        r.fail("Service", "not installed", "run `wayshare setup`");
     } else if enabled == "enabled" && active == "active" {
         r.ok("Service", "running, starts with your session");
     } else {

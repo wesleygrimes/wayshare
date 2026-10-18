@@ -30,7 +30,7 @@ pub fn run() -> Result<()> {
         VerifierRecord::generate(&user, &password, srp::DEFAULT_ITERATIONS).save(&srp_path)?;
     }
 
-    let output = choose_output(&hypr.outputs()?)?;
+    let output = choose_output(&hypr.outputs()?, settings.output.as_deref())?;
     let addrs = interface_addrs();
     let listen = choose_listen(settings.listen, &addrs)?;
     let text = match std::fs::read_to_string(&config_path) {
@@ -134,14 +134,18 @@ pub fn ask_yes_no(prompt: &str) -> Result<bool> {
     Ok(matches!(a.to_ascii_lowercase().as_str(), "y" | "yes"))
 }
 
-fn choose_output(outputs: &[OutputInfo]) -> Result<String> {
+fn choose_output(outputs: &[OutputInfo], current: Option<&str>) -> Result<String> {
     let enabled: Vec<_> = outputs.iter().filter(|o| !o.disabled).collect();
     match enabled.as_slice() {
         [] => bail!("Hyprland reports no enabled monitors"),
         [only] => return Ok(only.name.clone()),
         _ => {}
     }
-    let default = enabled.iter().position(|o| o.focused).unwrap_or(0);
+    let default = enabled
+        .iter()
+        .position(|o| Some(o.name.as_str()) == current)
+        .or_else(|| enabled.iter().position(|o| o.focused))
+        .unwrap_or(0);
     println!("Which monitor should the Mac see?");
     for (i, o) in enabled.iter().enumerate() {
         println!("  {}) {} ({}x{})", i + 1, o.name, o.width, o.height);

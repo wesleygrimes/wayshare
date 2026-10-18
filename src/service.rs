@@ -1,5 +1,5 @@
-//! The systemd user unit written by `wayshare install-service`, for installs without a package,
-//! and the commands that drive it.
+//! The systemd user unit that `wayshare setup` writes for installs without a package, and the
+//! commands that drive it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
