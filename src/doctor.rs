@@ -11,33 +11,63 @@ use crate::display::DisplayManager;
 use crate::display::hyprland::Hyprland;
 use crate::rfb::srp::VerifierRecord;
 use crate::setup::{self, Firewall};
+use crate::ui;
 
 #[derive(Default)]
 struct Report {
-    failed: bool,
+    failed: usize,
+    warned: usize,
 }
 
 impl Report {
     fn ok(&self, what: &str, detail: &str) {
-        println!("✓ {what}: {detail}");
+        ui::check(Some(true), what, detail);
     }
 
-    fn warn(&self, what: &str, detail: &str, fix: &str) {
-        println!("! {what}: {detail}\n    {fix}");
+    fn warn(&mut self, what: &str, detail: &str, fix: &str) {
+        self.warned += 1;
+        ui::check(None, what, detail);
+        ui::check_hint(fix);
     }
 
     fn fail(&mut self, what: &str, detail: &str, fix: &str) {
-        self.failed = true;
-        println!("✗ {what}: {detail}\n    {fix}");
+        self.failed += 1;
+        ui::check(Some(false), what, detail);
+        ui::check_hint(fix);
     }
+
+    fn summary(&self) {
+        match (self.failed, self.warned) {
+            (0, 0) => ui::heading("Everything looks good."),
+            (0, w) => ui::heading(&format!("No problems; {w} warning{}.", plural(w))),
+            (f, _) => println!(
+                "\n{}",
+                console::style(format!("{f} problem{} found.", plural(f)))
+                    .color256(204)
+                    .bold()
+            ),
+        }
+        println!();
+    }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
 }
 
 /// Prints one line per check. Returns false if any check failed.
 pub fn run() -> Result<bool> {
+    ui::title("wayshare doctor");
     let mut r = Report::default();
     let s = match Settings::load(None) {
         Ok(s) => {
-            r.ok("Config", "readable");
+            let path = crate::config::config_dir()?.join("config.toml");
+            let detail = if path.exists() {
+                ui::path(&path)
+            } else {
+                "defaults (no config.toml)".into()
+            };
+            r.ok("Config", &detail);
             s
         }
         Err(e) => {
@@ -84,15 +114,16 @@ pub fn run() -> Result<bool> {
         }
     }
 
-    match s
-        .srp_path()
-        .and_then(|p| VerifierRecord::load(&p).map(|rec| (p, rec)))
-    {
-        Ok((p, rec)) => r.ok(
-            "Password",
-            &format!("set for {} in {}", rec.username, p.display()),
-        ),
-        Err(e) => r.fail("Password", &format!("{e:#}"), "run `wayshare set-password`"),
+    match s.srp_path() {
+        Ok(p) if !p.exists() => r.fail("Password", "not set", "run `wayshare set-password`"),
+        Ok(p) => match VerifierRecord::load(&p) {
+            Ok(rec) => r.ok(
+                "Password",
+                &format!("set for {} in {}", rec.username, ui::path(&p)),
+            ),
+            Err(e) => r.fail("Password", &format!("{e:#}"), "run `wayshare set-password`"),
+        },
+        Err(e) => r.fail("Password", &format!("{e:#}"), "set srp_file in config.toml"),
     }
 
     let enabled = systemctl_query("is-enabled");
@@ -100,7 +131,7 @@ pub fn run() -> Result<bool> {
     if enabled.is_empty() || enabled == "not-found" {
         r.fail("Service", "not installed", "run `wayshare setup`");
     } else if enabled == "enabled" && active == "active" {
-        r.ok("Service", "running, starts with your session");
+        r.ok("Service", "running, starts when you log in");
     } else {
         r.fail(
             "Service",
@@ -149,7 +180,14 @@ pub fn run() -> Result<bool> {
     } else {
         #[cfg(target_os = "linux")]
         match crate::server_linux::hp_encoder(&s.video_encoder()) {
-            Ok(backend) => r.ok("High Performance", &format!("{backend:?} encoder")),
+            Ok(backend) => {
+                let name = match backend {
+                    crate::encode::EncoderBackend::Vaapi => "VA-API (hardware)",
+                    crate::encode::EncoderBackend::Nvenc => "NVENC (hardware)",
+                    crate::encode::EncoderBackend::X265 => "x265 (software)",
+                };
+                r.ok("High Performance", name)
+            }
             Err(e) => r.warn(
                 "High Performance",
                 &format!("unavailable: {e:#}"),
@@ -158,7 +196,8 @@ pub fn run() -> Result<bool> {
         }
     }
 
-    Ok(!r.failed)
+    r.summary();
+    Ok(r.failed == 0)
 }
 
 fn systemctl_query(verb: &str) -> String {

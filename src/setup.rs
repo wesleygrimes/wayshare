@@ -1,19 +1,21 @@
 //! `wayshare setup`, and the helpers it shares with `wayshare doctor` and the server.
 
-use std::io::{BufRead, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+use demand::{Confirm, DemandOption, Input, Select};
 
 use crate::config::{Settings, config_dir};
 use crate::display::hyprland::Hyprland;
 use crate::display::{DisplayManager, OutputInfo};
 use crate::rfb::srp::{self, VerifierRecord};
 use crate::service::systemctl;
+use crate::ui;
 
 pub fn run() -> Result<()> {
+    ui::title("wayshare setup");
     let mut hypr =
         Hyprland::from_env().context("run `wayshare setup` inside your Hyprland session")?;
     hypr.check_version()?;
@@ -23,10 +25,17 @@ pub fn run() -> Result<()> {
     let user = current_user()?;
     let srp_path = settings.srp_path()?;
     if settings.srp_file.is_some() {
-        println!("Using the password in {}", srp_path.display());
-    } else if !srp_path.exists() || ask_yes_no(&format!("Change the password for {user}?"))? {
-        println!("Pick a password. Screen Sharing asks for it with the user name {user}.");
-        let password = read_password(None)?;
+        ui::done("Password", &format!("from {}", ui::path(&srp_path)));
+    } else if !srp_path.exists()
+        || Confirm::new(format!("Change the password for {user}?"))
+            .affirmative("Change")
+            .negative("Keep")
+            .selected(false)
+            .run()?
+    {
+        let password = prompt_password(&format!(
+            "Screen Sharing asks for this with the user name {user}"
+        ))?;
         VerifierRecord::generate(&user, &password, srp::DEFAULT_ITERATIONS).save(&srp_path)?;
     }
 
@@ -47,37 +56,85 @@ pub fn run() -> Result<()> {
     std::fs::create_dir_all(config_path.parent().unwrap())?;
     std::fs::write(&config_path, text)
         .with_context(|| format!("writing {}", config_path.display()))?;
-    println!("Sharing {output}; saved to {}", config_path.display());
+    ui::done("Config", &format!("saved to {}", ui::path(&config_path)));
 
-    // A package's unit in /usr/lib would be shadowed by one written to ~/.local.
-    if !unit_loaded() {
-        crate::service::install()?;
-        systemctl(&["daemon-reload"])?;
-    }
-    systemctl(&["enable", "wayshare"])?;
-    systemctl(&["restart", "wayshare"])?;
-    println!("wayshare is running and starts with your session.");
+    ui::spin("Starting wayshare…", || -> Result<()> {
+        // A package's unit in /usr/lib would be shadowed by one written to ~/.local.
+        if !unit_loaded() {
+            crate::service::install()?;
+            systemctl(&["daemon-reload"])?;
+        }
+        systemctl(&["enable", "wayshare"])?;
+        systemctl(&["restart", "wayshare"])
+    })?;
+    ui::done("Service", "running, starts when you log in");
 
     let bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == listen.ip());
     let ip = bound.map(|a| a.ip).or_else(lan_ipv4);
-    match firewall(listen.port()) {
-        Firewall::Off | Firewall::Allows => {}
-        Firewall::Blocks | Firewall::Unknown => {
-            println!("\nufw is on. If you haven't already, let the Mac in:");
-            println!("  {}", ufw_hint(listen.port(), bound, ip, &addrs));
-        }
-    }
+    firewall_step(listen.port(), bound, ip, &addrs)?;
 
     let name = settings.name.clone().unwrap_or_else(hostname);
-    println!("\nOn your Mac, open Screen Sharing, choose Connection > New, and enter:");
-    match ip {
-        Some(ip) => println!("  {ip}"),
-        None => println!("  this machine's IP address"),
-    }
+    let address = ip.map_or("this machine's IP address".into(), |ip| ip.to_string());
+    ui::heading("Ready");
+    ui::line("On your Mac, open Screen Sharing and choose Connection › New.");
+    ui::line(&format!("Address  {}", ui::code(&address)));
+    ui::line(&format!("User     {}", ui::code(&user)));
     if settings.mdns.enabled && bound.is_none() {
-        println!("Or click {name} under Network in Finder's sidebar.");
+        ui::line(&ui::dim(&format!(
+            "Or click {name} under Network in Finder's sidebar."
+        )));
     }
-    println!("Sign in as {user}. Something wrong? Run `wayshare doctor`.");
+    println!();
+    ui::line(&ui::dim("Trouble connecting? Run `wayshare doctor`."));
+    println!();
+    Ok(())
+}
+
+fn firewall_step(
+    port: u16,
+    bound: Option<&InterfaceAddr>,
+    lan_ip: Option<Ipv4Addr>,
+    addrs: &[InterfaceAddr],
+) -> Result<()> {
+    let why = match firewall(port) {
+        Firewall::Off => {
+            ui::done("Firewall", "ufw is off");
+            return Ok(());
+        }
+        Firewall::Allows => {
+            ui::done("Firewall", &format!("ufw allows TCP {port}"));
+            return Ok(());
+        }
+        Firewall::Blocks => format!("ufw is on and has no rule for TCP {port}."),
+        Firewall::Unknown => format!("ufw is on; checking for a TCP {port} rule needs root."),
+    };
+    let rule = ufw_rule(port, bound, lan_ip, addrs);
+    let command = format!("sudo ufw {}", rule.join(" "));
+    let add = Confirm::new("Add a firewall rule for your Mac?")
+        .description(&format!(
+            "{why} Runs `{command}`; sudo asks for your password."
+        ))
+        .affirmative("Add rule")
+        .negative("Skip")
+        .run()?;
+    if !add {
+        ui::warn("Firewall", "skipped; the Mac may not be able to connect");
+        ui::hint(&command);
+        return Ok(());
+    }
+    // sudo reads the password from the terminal itself; only ufw's chatter is captured.
+    let out = Command::new("sudo")
+        .arg("ufw")
+        .args(&rule)
+        .stdin(Stdio::inherit())
+        .output()
+        .context("running sudo")?;
+    if out.status.success() {
+        ui::done("Firewall", &format!("ufw allows TCP {port}"));
+    } else {
+        ui::fail("Firewall", "couldn't add the rule");
+        ui::hint(&command);
+    }
     Ok(())
 }
 
@@ -94,51 +151,52 @@ pub fn current_user() -> Result<String> {
     std::env::var("USER").context("USER not set; pass --user")
 }
 
+/// Reads a password from `path`, trimming the trailing newline, or prompts for it.
 pub fn read_password(path: Option<&Path>) -> Result<Vec<u8>> {
-    let pw = match path {
-        Some(p) => {
-            let raw = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;
-            let end = raw
-                .iter()
-                .rposition(|&b| b != b'\n' && b != b'\r')
-                .map_or(0, |i| i + 1);
-            raw[..end].to_vec()
-        }
-        None => {
-            let a = rpassword::prompt_password("Password: ")?;
-            let b = rpassword::prompt_password("Again: ")?;
-            if a != b {
-                bail!("passwords do not match");
-            }
-            a.into_bytes()
-        }
+    let Some(p) = path else {
+        return prompt_password("Screen Sharing asks for this when you connect");
     };
-    if pw.is_empty() {
+    let raw = std::fs::read(p).with_context(|| format!("reading {}", p.display()))?;
+    let end = raw
+        .iter()
+        .rposition(|&b| b != b'\n' && b != b'\r')
+        .map_or(0, |i| i + 1);
+    if end == 0 {
         bail!("empty password");
     }
-    Ok(pw)
+    Ok(raw[..end].to_vec())
 }
 
-fn ask(prompt: &str) -> Result<String> {
-    print!("{prompt} ");
-    std::io::stdout().flush()?;
-    let mut line = String::new();
-    if std::io::stdin().lock().read_line(&mut line)? == 0 {
-        bail!("no answer on stdin");
+fn prompt_password(description: &str) -> Result<Vec<u8>> {
+    loop {
+        let a = Input::new("Password")
+            .description(description)
+            .password(true)
+            .validation(|s| {
+                if s.is_empty() {
+                    Err("Enter a password")
+                } else {
+                    Ok(())
+                }
+            })
+            .run()?;
+        let b = Input::new("Confirm password").password(true).run()?;
+        if a == b {
+            return Ok(a.into_bytes());
+        }
+        ui::fail("Password", "the two entries didn't match; try again");
     }
-    Ok(line.trim().to_string())
-}
-
-pub fn ask_yes_no(prompt: &str) -> Result<bool> {
-    let a = ask(&format!("{prompt} [y/N]"))?;
-    Ok(matches!(a.to_ascii_lowercase().as_str(), "y" | "yes"))
 }
 
 fn choose_output(outputs: &[OutputInfo], current: Option<&str>) -> Result<String> {
     let enabled: Vec<_> = outputs.iter().filter(|o| !o.disabled).collect();
+    let label = |o: &OutputInfo| format!("{} · {}×{}", o.name, o.width, o.height);
     match enabled.as_slice() {
         [] => bail!("Hyprland reports no enabled monitors"),
-        [only] => return Ok(only.name.clone()),
+        [only] => {
+            ui::done("Monitor", &label(only));
+            return Ok(only.name.clone());
+        }
         _ => {}
     }
     let default = enabled
@@ -146,52 +204,47 @@ fn choose_output(outputs: &[OutputInfo], current: Option<&str>) -> Result<String
         .position(|o| Some(o.name.as_str()) == current)
         .or_else(|| enabled.iter().position(|o| o.focused))
         .unwrap_or(0);
-    println!("Which monitor should the Mac see?");
-    for (i, o) in enabled.iter().enumerate() {
-        println!("  {}) {} ({}x{})", i + 1, o.name, o.width, o.height);
-    }
-    loop {
-        let a = ask(&format!("Monitor [{}]:", default + 1))?;
-        if a.is_empty() {
-            return Ok(enabled[default].name.clone());
-        }
-        match a.parse::<usize>() {
-            Ok(n) if (1..=enabled.len()).contains(&n) => return Ok(enabled[n - 1].name.clone()),
-            _ => println!("Enter a number from 1 to {}.", enabled.len()),
-        }
-    }
+    let options = enabled
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            DemandOption::new(o.name.clone())
+                .label(&label(o))
+                .selected(i == default)
+        })
+        .collect();
+    Ok(Select::new("Monitor")
+        .description("The screen your Mac will see")
+        .options(options)
+        .run()?)
 }
 
 fn choose_listen(current: SocketAddr, addrs: &[InterfaceAddr]) -> Result<SocketAddr> {
     let port = current.port();
-    let mut choices = vec![(
-        SocketAddr::from(([0, 0, 0, 0], port)),
-        "all interfaces".to_string(),
-    )];
+    let mut options = vec![
+        DemandOption::new(SocketAddr::from(([0, 0, 0, 0], port)))
+            .label("All networks")
+            .description("any interface"),
+    ];
     for a in addrs.iter().filter(|a| !a.ip.is_loopback()) {
-        choices.push((
-            SocketAddr::from((a.ip, port)),
-            format!("{} {}", a.name, a.ip),
-        ));
+        options.push(
+            DemandOption::new(SocketAddr::from((a.ip, port)))
+                .label(&format!("{} · {}", a.name, a.ip))
+                .description("only this interface"),
+        );
     }
-    let default = choices
-        .iter()
-        .position(|(addr, _)| *addr == current)
-        .unwrap_or(0);
-    println!("Which network should wayshare listen on?");
-    for (i, (_, label)) in choices.iter().enumerate() {
-        println!("  {}) {label}", i + 1);
-    }
-    loop {
-        let a = ask(&format!("Network [{}]:", default + 1))?;
-        if a.is_empty() {
-            return Ok(choices[default].0);
-        }
-        match a.parse::<usize>() {
-            Ok(n) if (1..=choices.len()).contains(&n) => return Ok(choices[n - 1].0),
-            _ => println!("Enter a number from 1 to {}.", choices.len()),
-        }
-    }
+    let default = options.iter().position(|o| o.item == current).unwrap_or(0);
+    let options = options
+        .into_iter()
+        .enumerate()
+        .map(|(i, o)| o.selected(i == default))
+        .collect();
+    Ok(Select::new("Network")
+        .description(
+            "Where wayshare listens for your Mac. Pick tailscale0 to allow only Tailscale.",
+        )
+        .options(options)
+        .run()?)
 }
 
 /// The output to share when the config doesn't name one: the only enabled monitor.
@@ -300,23 +353,38 @@ pub fn subnet(ip: Ipv4Addr, prefix: u8) -> String {
     format!("{}/{prefix}", Ipv4Addr::from(u32::from(ip) & mask))
 }
 
-/// The ufw rule for `port`: by interface when wayshare listens on one, else by LAN range.
+/// The ufw arguments that allow `port`: by interface when wayshare listens on one, else by LAN
+/// range.
+pub fn ufw_rule(
+    port: u16,
+    bound: Option<&InterfaceAddr>,
+    lan_ip: Option<Ipv4Addr>,
+    addrs: &[InterfaceAddr],
+) -> Vec<String> {
+    let mut rule: Vec<String> = vec!["allow".into()];
+    match bound {
+        Some(a) => rule.extend(["in".into(), "on".into(), a.name.clone()]),
+        None => {
+            let range = lan_ip
+                .and_then(|ip| addrs.iter().find(|a| a.ip == ip))
+                .map_or_else(|| "192.168.1.0/24".into(), |a| subnet(a.ip, a.prefix));
+            rule.extend(["from".into(), range]);
+        }
+    }
+    rule.extend(["to", "any", "port", &port.to_string(), "proto", "tcp"].map(String::from));
+    rule
+}
+
 pub fn ufw_hint(
     port: u16,
     bound: Option<&InterfaceAddr>,
     lan_ip: Option<Ipv4Addr>,
     addrs: &[InterfaceAddr],
 ) -> String {
-    if let Some(a) = bound {
-        return format!(
-            "sudo ufw allow in on {} to any port {port} proto tcp",
-            a.name
-        );
-    }
-    let range = lan_ip
-        .and_then(|ip| addrs.iter().find(|a| a.ip == ip))
-        .map_or_else(|| "192.168.1.0/24".into(), |a| subnet(a.ip, a.prefix));
-    format!("sudo ufw allow from {range} to any port {port} proto tcp")
+    format!(
+        "sudo ufw {}",
+        ufw_rule(port, bound, lan_ip, addrs).join(" ")
+    )
 }
 
 #[derive(Debug, PartialEq, Eq)]

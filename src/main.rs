@@ -156,48 +156,24 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    // The interactive commands print their own output; server logs would clutter it.
+    let default_level = if cli.command.is_some() {
+        "error"
+    } else {
+        "info"
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level)),
         )
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stdout()))
         .init();
-    let cli = Cli::parse();
 
-    match cli.command {
-        Some(Command::Setup) => return wayshare::setup::run(),
-        Some(Command::Start) => return wayshare::service::systemctl(&["start", "wayshare"]),
-        Some(Command::Stop) => return wayshare::service::systemctl(&["stop", "wayshare"]),
-        Some(Command::Restart) => return wayshare::service::systemctl(&["restart", "wayshare"]),
-        Some(Command::Upgrade) => return wayshare::service::upgrade(),
-        Some(Command::Uninstall) => return wayshare::service::uninstall(),
-        Some(Command::Doctor) => {
-            if !wayshare::doctor::run()? {
-                std::process::exit(1);
-            }
-            return Ok(());
+    if let Some(command) = cli.command {
+        if let Err(e) = run_command(command) {
+            wayshare::ui::exit_with(e);
         }
-        _ => {}
-    }
-
-    if let Some(Command::SetPassword {
-        user,
-        password_file,
-        srp_file,
-        iterations,
-    }) = cli.command
-    {
-        let user = match user {
-            Some(u) => u,
-            None => wayshare::setup::current_user()?,
-        };
-        let path = match srp_file {
-            Some(p) => p,
-            None => wayshare::config::default_srp_path(&user)?,
-        };
-        let password = wayshare::setup::read_password(password_file.as_deref())?;
-        VerifierRecord::generate(&user, &password, iterations).save(&path)?;
-        println!("wrote SRP verifier for {user} to {}", path.display());
         return Ok(());
     }
 
@@ -206,6 +182,47 @@ async fn main() -> Result<()> {
     cli.serve.apply(&mut settings);
     settings.validate()?;
     run(settings).await
+}
+
+fn run_command(command: Command) -> Result<()> {
+    use wayshare::{service, ui};
+    match command {
+        Command::Setup => wayshare::setup::run(),
+        Command::Doctor => {
+            if !wayshare::doctor::run()? {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        Command::Start => service::control("start"),
+        Command::Stop => service::control("stop"),
+        Command::Restart => service::control("restart"),
+        Command::Upgrade => service::upgrade(),
+        Command::Uninstall => service::uninstall(),
+        Command::SetPassword {
+            user,
+            password_file,
+            srp_file,
+            iterations,
+        } => {
+            let user = match user {
+                Some(u) => u,
+                None => wayshare::setup::current_user()?,
+            };
+            let path = match srp_file {
+                Some(p) => p,
+                None => wayshare::config::default_srp_path(&user)?,
+            };
+            let password = wayshare::setup::read_password(password_file.as_deref())?;
+            VerifierRecord::generate(&user, &password, iterations).save(&path)?;
+            ui::done(
+                "Password",
+                &format!("saved for {user} in {}", ui::path(&path)),
+            );
+            ui::hint("run `wayshare restart` to use it");
+            Ok(())
+        }
+    }
 }
 
 async fn run(s: Settings) -> Result<()> {

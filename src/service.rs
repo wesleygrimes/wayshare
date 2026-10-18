@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use demand::Confirm;
+
+use crate::ui;
 
 const TEMPLATE: &str = include_str!("../contrib/wayshare.service.in");
 const INSTALL_SCRIPT: &str =
@@ -44,16 +47,31 @@ pub fn install() -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Runs `systemctl --user <args>`.
+/// Runs `systemctl --user <args>` quietly; its stderr becomes the error message.
 pub fn systemctl(args: &[&str]) -> Result<()> {
-    let status = Command::new("systemctl")
+    let out = Command::new("systemctl")
         .arg("--user")
         .args(args)
-        .status()
+        .output()
         .context("running systemctl")?;
-    if !status.success() {
-        bail!("systemctl --user {} failed", args.join(" "));
+    if !out.status.success() {
+        let why = String::from_utf8_lossy(&out.stderr);
+        bail!("systemctl --user {} failed: {}", args.join(" "), why.trim());
     }
+    Ok(())
+}
+
+/// `wayshare start`, `stop` and `restart`.
+pub fn control(verb: &str) -> Result<()> {
+    let (doing, done) = match verb {
+        "start" => ("Starting", "started"),
+        "stop" => ("Stopping", "stopped"),
+        _ => ("Restarting", "restarted"),
+    };
+    ui::spin(&format!("{doing} wayshare…"), || {
+        systemctl(&[verb, "wayshare"])
+    })?;
+    ui::done("wayshare", done);
     Ok(())
 }
 
@@ -80,63 +98,89 @@ pub fn install_kind(exe: &Path) -> InstallKind {
 /// Re-runs install.sh into the current binary's directory, or says how to upgrade otherwise.
 pub fn upgrade() -> Result<()> {
     let exe = std::env::current_exe().context("finding the wayshare binary")?;
-    match install_kind(&exe) {
-        InstallKind::Mise => println!(
-            "Installed with mise. Run `mise up github:wesleygrimes/wayshare`, then `wayshare restart`."
-        ),
-        InstallKind::Cargo => println!(
-            "Installed with cargo. Run `cargo install --locked --path .` in your checkout, then \
-             `wayshare restart`."
-        ),
-        InstallKind::System => println!(
-            "Installed by your package manager. Upgrade it there, then run `wayshare restart`."
-        ),
+    let how = match install_kind(&exe) {
+        InstallKind::Mise => "mise up github:wesleygrimes/wayshare",
+        InstallKind::Cargo => "cargo install --locked --path .",
+        InstallKind::System => "your package manager",
         InstallKind::Script => {
             let dir = exe.parent().context("binary has no parent directory")?;
-            let status = Command::new("sh")
-                .arg("-c")
-                .arg(format!("curl -fsSL --proto '=https' {INSTALL_SCRIPT} | sh"))
-                .env("WAYSHARE_INSTALL_DIR", dir)
-                .status()
-                .context("running the installer")?;
-            if !status.success() {
-                bail!("the installer failed");
+            let old = env!("CARGO_PKG_VERSION");
+            ui::spin("Downloading the latest release…", || -> Result<()> {
+                let out = Command::new("sh")
+                    .arg("-c")
+                    .arg(format!("curl -fsSL --proto '=https' {INSTALL_SCRIPT} | sh"))
+                    .env("WAYSHARE_INSTALL_DIR", dir)
+                    .output()
+                    .context("running the installer")?;
+                if !out.status.success() {
+                    let why = String::from_utf8_lossy(&out.stderr);
+                    bail!("the installer failed: {}", why.trim());
+                }
+                systemctl(&["try-restart", "wayshare"])
+            })?;
+            let new = Command::new(&exe)
+                .arg("--version")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|v| v.split_whitespace().nth(1).map(str::to_string))
+                .unwrap_or_default();
+            if new == old {
+                ui::done("wayshare", &format!("{old} is the latest release"));
+            } else {
+                ui::done("wayshare", &format!("upgraded {old} → {new} and restarted"));
             }
-            systemctl(&["try-restart", "wayshare"])?;
+            return Ok(());
         }
-    }
+    };
+    ui::warn("wayshare", "isn't managed by install.sh");
+    ui::hint(&format!("upgrade with {how}, then run `wayshare restart`"));
     Ok(())
 }
 
 /// Stops the service and removes the unit and, for install.sh installs, the binary. Keeps the
 /// config directory.
 pub fn uninstall() -> Result<()> {
-    if !crate::setup::ask_yes_no("Remove wayshare?")? {
+    let config = crate::config::config_dir()?;
+    let remove = Confirm::new("Remove wayshare?")
+        .description(&format!(
+            "Stops the service and removes wayshare. Your settings stay in {}.",
+            ui::path(&config)
+        ))
+        .affirmative("Remove")
+        .negative("Cancel")
+        .selected(false)
+        .run()?;
+    if !remove {
         return Ok(());
     }
     let exe = std::env::current_exe().context("finding the wayshare binary")?;
     let _ = systemctl(&["disable", "--now", "wayshare"]);
+    ui::done("Service", "stopped and disabled");
     let unit = unit_dir()?.join("wayshare.service");
     if unit.exists() {
         std::fs::remove_file(&unit).with_context(|| format!("removing {}", unit.display()))?;
-        println!("Removed {}", unit.display());
         let _ = systemctl(&["daemon-reload"]);
+        ui::done("Unit", &format!("removed {}", ui::path(&unit)));
     }
-    match install_kind(&exe) {
+    let finish = match install_kind(&exe) {
         InstallKind::Script => {
             std::fs::remove_file(&exe).with_context(|| format!("removing {}", exe.display()))?;
-            println!("Removed {}", exe.display());
+            ui::done("Binary", &format!("removed {}", ui::path(&exe)));
+            None
         }
-        InstallKind::Mise => {
-            println!("Run `mise uninstall github:wesleygrimes/wayshare` to finish.")
-        }
-        InstallKind::Cargo => println!("Run `cargo uninstall wayshare` to finish."),
-        InstallKind::System => println!("Remove the wayshare package to finish."),
+        InstallKind::Mise => Some("mise uninstall github:wesleygrimes/wayshare"),
+        InstallKind::Cargo => Some("cargo uninstall wayshare"),
+        InstallKind::System => Some("remove the wayshare package"),
+    };
+    if let Some(how) = finish {
+        ui::warn("Binary", "still installed");
+        ui::hint(&format!("to finish: {how}"));
     }
-    println!(
-        "Your password and settings are still in {}; delete it to remove them.",
-        crate::config::config_dir()?.display()
-    );
+    ui::line(&ui::dim(&format!(
+        "Your password and settings are still in {}.",
+        ui::path(&config)
+    )));
     Ok(())
 }
 

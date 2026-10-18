@@ -6,7 +6,8 @@
 | UDP 5353 | optional | mDNS, so the machine shows up in Finder's sidebar |
 | UDP 5960, 5962 | no | High Performance video and audio. wayshare sends first, so replies come back through connection tracking |
 
-`wayshare setup` and `wayshare doctor` print the ufw rule for your network when ufw is on.
+When ufw is blocking the port, `wayshare setup` offers to add the rule for you, using sudo.
+`wayshare doctor` prints the rule without changing anything.
 To add the rules yourself for your local network (adjust the range to yours):
 
 ```sh

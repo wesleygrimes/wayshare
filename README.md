@@ -38,8 +38,8 @@ wayshare setup
 ```
 
 It asks for a password, which monitor to share and which network to listen on. Then it
-starts the service and tells you what to type on the Mac. If ufw is on, it also prints the
-rule that lets the Mac in. Not on Omarchy? If wayshare doesn't come back after you log in
+starts the service and tells you what to type on the Mac. If ufw is blocking the port, it
+offers to add a rule for you, using sudo. Not on Omarchy? If wayshare doesn't come back after you log in
 again, add [one line to `hyprland.conf`](docs/troubleshooting.md#the-service-doesnt-start-at-login).
 
 On the Mac, open the **Screen Sharing** app (search for it with Spotlight), choose
