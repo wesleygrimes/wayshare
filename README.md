@@ -39,50 +39,33 @@ wayshare setup
 
 It asks for a password, which monitor to share and which network to listen on. Then it
 starts the service and tells you what to type on the Mac. If ufw is blocking the port, it
-offers to add a rule for you, using sudo. Not on Omarchy? If wayshare doesn't come back after you log in
-again, add [one line to `hyprland.conf`](docs/troubleshooting.md#the-service-doesnt-start-at-login).
+offers to add a rule for you, using sudo. Not on Omarchy? If wayshare doesn't come back
+after you log in again, add [one line to `hyprland.conf`](docs/troubleshooting.md#the-service-doesnt-start-at-login).
 
-On the Mac, open the **Screen Sharing** app (search for it with Spotlight), choose
-**Connection > New** and enter the address setup printed. Sign in with your Linux user name
-and the password you picked. For sharper, low-latency video and sound, pick **High
-Performance** when it asks (see [High Performance mode](docs/high-performance.md)).
-
-The machine also shows up in Finder's sidebar under **Network**.
+On the Mac, connect with the **Screen Sharing** app and pick **High Performance** when it
+asks, for sharper, low-latency video and sound.
 
 Something not working? Run `wayshare doctor`. It checks each piece and tells you how to fix
 what's missing. [Troubleshooting](docs/troubleshooting.md) covers the rest.
 
-## Upgrade
+## Commands
 
-```sh
-wayshare upgrade
-```
+| Command | Does |
+|---|---|
+| `wayshare setup` | set up or change the password, monitor and network |
+| `wayshare doctor` | check the setup and say how to fix problems |
+| `wayshare start`, `stop`, `restart` | control the service; restart after editing the config |
+| `wayshare upgrade` | install the latest release and restart |
+| `wayshare uninstall` | stop the service and remove wayshare; keeps `~/.config/wayshare` |
 
-This installs the latest release and restarts the service. If you installed with mise, it
-tells you the mise command instead. Coming from 0.1.5 or older, which has no `upgrade`, run
-the install command again, then `wayshare restart`.
-
-## Start, stop and restart
-
-`wayshare start`, `wayshare stop` and `wayshare restart` control the service. Restart after
-changing the config.
-
-## Uninstall
-
-```sh
-wayshare uninstall
-```
-
-This stops the service and removes wayshare. With mise, run it before `mise uninstall`, since
-mise can't stop the service for you. Your password and settings stay in `~/.config/wayshare`
-until you delete it.
+Coming from 0.1.5 or older, which has no `upgrade`, run the install command again, then
+`wayshare restart`. With mise, run `wayshare uninstall` before `mise uninstall`.
 
 ## More
 
 - [Configuration](docs/configuration.md): every setting, keyboard mapping, the sidebar name
 - [High Performance mode](docs/high-performance.md): what it needs, encoders, audio
-- [Firewall](docs/firewall.md): which ports to open
-- [Security](docs/security.md): what's encrypted, and using Tailscale or a VPN
+- [Security](docs/security.md): what's encrypted, ports, and using Tailscale or a VPN
 - [Troubleshooting](docs/troubleshooting.md): logs and the usual problems
 - [Packaging](docs/packaging.md): install layout and dependencies, for distro packagers
 - [Development](docs/development.md): building, tests, live checks

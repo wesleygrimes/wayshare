@@ -25,13 +25,17 @@ password or any other important one.
 
 ## Only accept connections over Tailscale
 
-`wayshare setup` asks which network to listen on; pick `tailscale0`. Or set `listen` to the
-machine's Tailscale address (`tailscale ip -4` prints it) in `~/.config/wayshare/config.toml`:
-
-```toml
-listen = "100.101.102.103:5900"
-```
-
-wayshare then refuses connections from your local network and only answers over Tailscale.
+Run `wayshare setup` and pick `tailscale0` as the network. wayshare then refuses connections from your local network and only answers over Tailscale.
 Tailscale has to be up before wayshare starts. If it isn't, wayshare can't listen on the
 address and the service fails; run `wayshare restart` once Tailscale is up.
+
+## Ports
+
+| Port | Needed | Why |
+|---|---|---|
+| TCP 5900 | yes | the Screen Sharing connection |
+| UDP 5353 | optional | mDNS, so the machine shows up in Finder's sidebar |
+| UDP 5960, 5962 | no | High Performance video and audio. wayshare sends first, so replies come back through connection tracking |
+
+`wayshare setup` offers to open TCP 5900 in ufw. With another firewall, open it yourself,
+and only to your local network or VPN.

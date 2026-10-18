@@ -24,8 +24,7 @@ cargo install --locked --path .
 wayshare setup
 ```
 
-This puts `wayshare` in `~/.cargo/bin` and its unit in `~/.local/share/systemd/user`. To
-upgrade, run `cargo install` again, then `wayshare restart`.
+This puts `wayshare` in `~/.cargo/bin` and its unit in `~/.local/share/systemd/user`.
 
 ## mise
 
