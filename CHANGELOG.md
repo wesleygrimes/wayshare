@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.1 - 2026-10-18
+
+### Fixes
+
+- High Performance mode now imports all planes of GPU capture buffers and uses the HEVC limits reported by the driver. Tested on Intel Raptor Lake-P with iHD 26.2.4. Thanks @ChachizR. ([#48](https://github.com/wesleygrimes/wayshare/pull/48))
+
+### Performance
+
+- High Performance video sends each tile's packets as soon as they are ready and spends less CPU time packetizing and encrypting them. ([#49](https://github.com/wesleygrimes/wayshare/pull/49))
+
+### Documentation
+
+- The README puts installation and setup first and credits ChachizR for code. ([#46](https://github.com/wesleygrimes/wayshare/pull/46), [#50](https://github.com/wesleygrimes/wayshare/pull/50))
+
+### Maintenance
+
+- Fixes an intermittent macOS test failure when using a nonblocking fake Hyprland socket. ([#51](https://github.com/wesleygrimes/wayshare/pull/51))
+
+**Full changelog**: [v0.2.0...v0.2.1](https://github.com/wesleygrimes/wayshare/compare/v0.2.0...v0.2.1)
+
 ## 0.2.0 - 2026-10-18
 
 ### Breaking changes
