@@ -171,6 +171,12 @@ async fn main() -> Result<()> {
         .init();
 
     if let Some(command) = cli.command {
+        // Rust ignores SIGPIPE, so `wayshare doctor | head` would panic in println!. Resetting
+        // a signal disposition to the default touches no Rust-owned memory.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
         if let Err(e) = run_command(command) {
             wayshare::ui::exit_with(e);
         }
