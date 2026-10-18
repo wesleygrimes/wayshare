@@ -14,6 +14,7 @@
 - `wayshare doctor` checks Hyprland, the monitor, the password, the service, the port, ufw and the High Performance encoder, and says how to fix each problem. ([#41](https://github.com/wesleygrimes/wayshare/pull/41))
 - `wayshare start`, `stop`, `restart`, `upgrade` and `uninstall` manage the service without `systemctl`. ([#41](https://github.com/wesleygrimes/wayshare/pull/41))
 - `wayshare set-password` uses your Linux user name unless you pass `--user`. ([#41](https://github.com/wesleygrimes/wayshare/pull/41))
+- With `exclusive = true`, wayshare turns off your other monitors while a viewer is connected and moves their workspaces onto the shared one, then puts everything back when the last viewer leaves. It's off by default. Thanks @bndnsmth. ([#38](https://github.com/wesleygrimes/wayshare/pull/38))
 
 ### Documentation
 

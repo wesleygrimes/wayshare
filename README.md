@@ -63,7 +63,7 @@ Coming from 0.1.5 or older, which has no `upgrade`, run the install command agai
 
 ## More
 
-- [Configuration](docs/configuration.md): every setting, keyboard mapping, the sidebar name
+- [Configuration](docs/configuration.md): every setting, exclusive display, keyboard mapping, the sidebar name
 - [High Performance mode](docs/high-performance.md): what it needs, encoders, audio
 - [Security](docs/security.md): what's encrypted, ports, and using Tailscale or a VPN
 - [Troubleshooting](docs/troubleshooting.md): logs and the usual problems
