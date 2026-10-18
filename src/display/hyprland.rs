@@ -529,6 +529,8 @@ mod tests {
                         Err(e) => panic!("accept: {e}"),
                     }
                 };
+                // macOS inherits the listener's nonblocking mode on accepted sockets.
+                client.set_nonblocking(false).unwrap();
                 client
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
@@ -540,6 +542,28 @@ mod tests {
             std::fs::remove_dir_all(dir).unwrap();
         });
         (Hyprland::with_socket(path), thread)
+    }
+
+    #[test]
+    fn fake_ipc_waits_for_request_bytes() {
+        let (hypr, thread) = fake_ipc(vec![("j/version".into(), "ok".into())]);
+        let mut client = UnixStream::connect(&hypr.socket).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let err = client.read(&mut [0]).unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ));
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        client.write_all(b"j/version").unwrap();
+        let mut reply = String::new();
+        client.read_to_string(&mut reply).unwrap();
+        assert_eq!(reply, "ok");
+        thread.join().unwrap();
     }
 
     fn saved_desktop() -> DesktopSnapshot {
