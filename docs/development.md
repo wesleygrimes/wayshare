@@ -40,6 +40,7 @@ missing Linux system packages but never uses sudo.
 | `mise run fmt:check` | check formatting |
 | `mise run lint` | clippy (warnings fail), ShellCheck, actionlint |
 | `mise run test` | `cargo test --locked` |
+| `mise run bench:media` | benchmark HEVC packetization and SRTP encryption; no GPU needed |
 | `mise run check` | `fmt:check`, `lint` and `test`; rewrites nothing |
 | `mise run check:commits <base>` | check that commits in `<base>..HEAD` are Conventional Commits |
 | `mise run build` | dev build; add `--release` for the optimized, locked build |
@@ -52,6 +53,19 @@ missing Linux system packages but never uses sudo.
 
 `audit` downloads the advisory database, so it needs network. `gen-vaapi-sys` needs libva
 headers and clang. Normal checks do not need a live Hyprland session.
+
+`bench:media` uses the optimized build and reports median time per call for a 1308-byte
+SRTP payload, a 64 KiB HEVC frame and a 4 MiB refresh. Compare runs on the same idle
+machine. These timings exclude capture, encoding, network transit and viewer buffering;
+they do not measure input-to-display latency. Live sessions log capture, encode and send
+times under `HP stats` every five seconds.
+
+On Linux, set `WAYSHARE_BENCH_OUTPUT` to also measure GPU change detection and VA-API
+conversion. The benchmark captures that output once and reuses the frame:
+
+```sh
+WAYSHARE_BENCH_OUTPUT=HEADLESS-1 mise run bench:media
+```
 
 ### Live exclusive-display test
 

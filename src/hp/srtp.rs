@@ -26,7 +26,22 @@ struct SessionKeys {
 
 fn keystream_xor(cipher: &Aes256, iv: [u8; 16], data: &mut [u8]) {
     let mut ctr = u128::from_be_bytes(iv);
-    for chunk in data.chunks_mut(16) {
+    // Independent counter blocks let the AES backend process several rounds in parallel.
+    let (batches, tail) = data.as_chunks_mut::<128>();
+    for chunk in batches {
+        let mut blocks: [aes::Block; 8] = std::array::from_fn(|_| {
+            let block = ctr.to_be_bytes().into();
+            ctr = ctr.wrapping_add(1);
+            block
+        });
+        cipher.encrypt_blocks(&mut blocks);
+        for (dst, block) in chunk.as_chunks_mut::<16>().0.iter_mut().zip(blocks) {
+            for (d, k) in dst.iter_mut().zip(block) {
+                *d ^= k;
+            }
+        }
+    }
+    for chunk in tail.chunks_mut(16) {
         let mut block = ctr.to_be_bytes().into();
         cipher.encrypt_block(&mut block);
         chunk
@@ -256,6 +271,28 @@ mod tests {
         p.extend_from_slice(&[0x93, 0x11, 0, 1, 0, 3, 0x20, 0]);
         p.extend((0..50u8).map(|i| i.wrapping_mul(7)));
         p
+    }
+
+    #[test]
+    fn batched_keystream_matches_scalar_at_boundaries() {
+        let cipher = Aes256::new(&[0x47; 32].into());
+        for counter in [0, 0xffff, u128::MAX - 3] {
+            for len in [0, 1, 15, 16, 17, 127, 128, 129, 255, 256, 257, 1300, 4096] {
+                let mut expected: Vec<u8> = (0..len).map(|i| i as u8).collect();
+                let mut actual = expected.clone();
+                let mut ctr = counter;
+                for chunk in expected.chunks_mut(16) {
+                    let mut block = ctr.to_be_bytes().into();
+                    cipher.encrypt_block(&mut block);
+                    for (d, k) in chunk.iter_mut().zip(block) {
+                        *d ^= k;
+                    }
+                    ctr = ctr.wrapping_add(1);
+                }
+                keystream_xor(&cipher, counter.to_be_bytes(), &mut actual);
+                assert_eq!(actual, expected, "counter {counter}, length {len}");
+            }
+        }
     }
 
     #[test]

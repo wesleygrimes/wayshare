@@ -37,6 +37,10 @@ run = [
 description = "Run the test suite"
 run = "cargo test --locked"
 
+[tasks."bench:media"]
+description = "Measure HEVC packetization and SRTP encryption without a GPU"
+run = "cargo bench --locked --bench media"
+
 [tasks.check]
 description = "Check formatting, lint and tests without rewriting files"
 depends = ["fmt:check", "lint", "test"]

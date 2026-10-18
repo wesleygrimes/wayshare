@@ -5,6 +5,10 @@ edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.89"
 
+[[bench]]
+name = "media"
+harness = false
+
 [dependencies]
 aes = "0.9.3"
 anyhow = "1.0.104"

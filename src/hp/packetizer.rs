@@ -1,5 +1,7 @@
 //! HEVC RTP packetizer in Apple's HP format (RFC 7798 with deviations).
 
+use std::borrow::Cow;
+
 pub const CLOCK_RATE: u32 = 24_000;
 pub const EXT_PROFILE: u16 = 0x9311;
 pub const DEFAULT_MTU_PAYLOAD: usize = 1300;
@@ -143,39 +145,49 @@ impl Packetizer {
     /// the tiles actually sent, as Apple's sender does.
     pub fn packetize(&mut self, tiles: &[Option<&[u8]>], rtp_ts: u32) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
+        self.packetize_each(tiles, rtp_ts, |p| out.push(p));
+        out
+    }
+
+    /// Delivers packets in wire order, buffering at most one tile's packets at a time.
+    pub fn packetize_each(
+        &mut self,
+        tiles: &[Option<&[u8]>],
+        rtp_ts: u32,
+        mut emit: impl FnMut(Vec<u8>),
+    ) {
         let tiles = &tiles[..tiles.len().min(self.cfg.tiles.into())];
         let last = tiles.iter().rposition(Option::is_some);
+        let nals: Vec<_> = tiles.iter().map(|au| au.map(split_annexb)).collect();
         // Every tile of a frame that starts with an IRAP picture is marked as a refresh.
-        let refresh = tiles.iter().flatten().any(|au| {
-            split_annexb(au)
-                .iter()
-                .any(|n| (NAL_IRAP_FIRST..=NAL_IRAP_LAST).contains(&nal_type(n)))
-        });
-        for (i, au) in tiles.iter().enumerate() {
-            let Some(au) = au else { continue };
-            let payloads = self.payloads(au, self.don, i, refresh, Some(i) == last);
+        let refresh = nals
+            .iter()
+            .flatten()
+            .flatten()
+            .any(|n| (NAL_IRAP_FIRST..=NAL_IRAP_LAST).contains(&nal_type(n)));
+        for (i, nals) in nals.into_iter().enumerate() {
+            let Some(nals) = nals else { continue };
+            let payloads = self.payloads(nals, self.don, i, refresh, Some(i) == last);
             self.don = self.don.wrapping_add(1);
             let count = payloads.len() as u16;
             let fnum = self.cfg.frame_number_base.wrapping_add(self.frame as u16);
             let ssrc = self.cfg.ssrc_base.wrapping_add(i as u32);
-            for (k, pl) in payloads.iter().enumerate() {
-                let marker = if k + 1 == payloads.len() { 0x80 } else { 0 };
-                let mut p = Vec::with_capacity(20 + pl.len() + SRTP_TAG_ROOM);
-                p.extend_from_slice(&[0x90, marker | self.cfg.payload_type]);
-                p.extend_from_slice(&self.seq[i].to_be_bytes());
-                p.extend_from_slice(&rtp_ts.to_be_bytes());
-                p.extend_from_slice(&ssrc.to_be_bytes());
-                p.extend_from_slice(&EXT_PROFILE.to_be_bytes());
-                p.extend_from_slice(&1u16.to_be_bytes());
-                p.extend_from_slice(&count.to_be_bytes());
-                p.extend_from_slice(&fnum.to_be_bytes());
-                p.extend_from_slice(pl);
-                out.push(p);
+            let len = payloads.len();
+            for (k, mut p) in payloads.into_iter().enumerate() {
+                let marker = if k + 1 == len { 0x80 } else { 0 };
+                p[..2].copy_from_slice(&[0x90, marker | self.cfg.payload_type]);
+                p[2..4].copy_from_slice(&self.seq[i].to_be_bytes());
+                p[4..8].copy_from_slice(&rtp_ts.to_be_bytes());
+                p[8..12].copy_from_slice(&ssrc.to_be_bytes());
+                p[12..14].copy_from_slice(&EXT_PROFILE.to_be_bytes());
+                p[14..16].copy_from_slice(&1u16.to_be_bytes());
+                p[16..18].copy_from_slice(&count.to_be_bytes());
+                p[18..20].copy_from_slice(&fnum.to_be_bytes());
+                emit(p);
                 self.seq[i] = self.seq[i].wrapping_add(1);
             }
         }
         self.frame = self.frame.wrapping_add(1);
-        out
     }
 
     /// Fields in ascending bit order, then the header byte. Bit layout comes from the
@@ -203,7 +215,7 @@ impl Packetizer {
 
     fn payloads(
         &mut self,
-        au: &[u8],
+        nals: Vec<&[u8]>,
         don: u16,
         tile: usize,
         refresh: bool,
@@ -211,7 +223,7 @@ impl Packetizer {
     ) -> Vec<Vec<u8>> {
         let donl = don.to_be_bytes();
         let mtu = self.cfg.mtu_payload;
-        let nals: Vec<&[u8]> = split_annexb(au)
+        let nals: Vec<&[u8]> = nals
             .into_iter()
             .filter(|n| n.len() >= 2 && !matches!(nal_type(n), NAL_SEI_PREFIX | NAL_SEI_SUFFIX))
             .collect();
@@ -239,10 +251,11 @@ impl Packetizer {
 
         let mut ap: Vec<u8> = Vec::new();
         for n in non_vcl {
-            if !ap.is_empty() && ap.len() + 2 + n.len() > mtu {
+            if !ap.is_empty() && ap.len() - 20 + 2 + n.len() > mtu {
                 out.push(std::mem::take(&mut ap));
             }
             if ap.is_empty() {
+                ap = packet_buffer(mtu);
                 ap.extend_from_slice(&[(n[0] & 0x81) | NAL_AP << 1, n[1]]);
                 ap.extend_from_slice(&donl);
             }
@@ -255,12 +268,18 @@ impl Packetizer {
 
         let last = vcl.len().wrapping_sub(1);
         for (k, n) in vcl.into_iter().enumerate() {
-            let mut body = n[2..].to_vec();
-            if k == last {
-                append_escaped(&mut body, &self.trailer(tile, refresh, last_tile));
-            }
+            let body: Cow<'_, [u8]> = if k == last {
+                let trailer = self.trailer(tile, refresh, last_tile);
+                // Each trailer byte can add at most one emulation-prevention byte.
+                let mut body = Vec::with_capacity(n.len() - 2 + 2 * trailer.len());
+                body.extend_from_slice(&n[2..]);
+                append_escaped(&mut body, &trailer);
+                Cow::Owned(body)
+            } else {
+                Cow::Borrowed(&n[2..])
+            };
             if body.len() + 4 <= mtu {
-                let mut p = Vec::with_capacity(body.len() + 4);
+                let mut p = packet_buffer(body.len() + 4);
                 p.extend_from_slice(&n[..2]);
                 p.extend_from_slice(&donl);
                 p.extend_from_slice(&body);
@@ -273,7 +292,7 @@ impl Packetizer {
             for (c, chunk) in chunks.iter().enumerate() {
                 let start = if c == 0 { 0x80 } else { 0 };
                 let end = if c + 1 == chunks.len() { 0x40 } else { 0 };
-                let mut p = Vec::with_capacity(chunk.len() + 5);
+                let mut p = packet_buffer(chunk.len() + 5);
                 p.extend_from_slice(&hdr);
                 p.push(start | end | nal_type(n));
                 p.extend_from_slice(&donl);
@@ -283,6 +302,12 @@ impl Packetizer {
         }
         out
     }
+}
+
+fn packet_buffer(payload_capacity: usize) -> Vec<u8> {
+    let mut p = Vec::with_capacity(20 + payload_capacity + SRTP_TAG_ROOM);
+    p.resize(20, 0);
+    p
 }
 
 /// Appends `bytes` to NAL payload `nal`, inserting emulation-prevention bytes as needed.
@@ -471,6 +496,51 @@ mod tests {
             NAL_AP,
             "a refresh with unchanged parameter sets re-sends them to every tile"
         );
+    }
+
+    #[test]
+    fn multiple_slices_only_append_the_trailer_to_the_last_slice() {
+        let first = nal(1, 3000);
+        let last = nal(1, 50);
+        let au = annexb(&[first.clone(), last.clone()]);
+        let mut pk = Packetizer::new(cfg());
+        let packets = pk.packetize(&[Some(&au)], 0);
+        assert_eq!(packets.len(), 4);
+        let mut body = Vec::new();
+        for p in &packets[..3] {
+            assert_eq!(nal_type(&p[20..]), NAL_FU);
+            assert_eq!(p[1] & 0x80, 0);
+            body.extend_from_slice(&p[25..]);
+        }
+        assert_eq!(body, first[2..]);
+        assert_eq!(packets[3][1] & 0x80, 0x80);
+        assert_eq!(&packets[3][24..24 + last.len() - 2], &last[2..]);
+        assert!(packets[3].ends_with(&hex("000003000014000b40000003000003000013")));
+    }
+
+    #[test]
+    fn streaming_refresh_on_later_tile_marks_every_tile() {
+        let mut pk = Packetizer::new(cfg());
+        let inter = annexb(&[nal(1, 50)]);
+        let refresh = annexb(&[nal(19, 3000)]);
+        let mut packets = Vec::new();
+        pk.packetize_each(&[Some(&inter), None, Some(&refresh)], 1234, |p| {
+            assert!(p.capacity() >= p.len() + SRTP_TAG_ROOM);
+            packets.push(p);
+        });
+        assert_eq!(packets.len(), 4);
+        assert_eq!(&packets[0][8..12], &1000u32.to_be_bytes());
+        assert!(packets[0].ends_with(&hex("07800438000003000003000018")));
+        for (k, p) in packets[1..].iter().enumerate() {
+            assert_eq!(&p[8..12], &1002u32.to_be_bytes());
+            assert_eq!(&p[4..8], &1234u32.to_be_bytes());
+            assert_eq!(&p[16..18], &3u16.to_be_bytes());
+            assert_eq!(&p[23..25], &0x1235u16.to_be_bytes());
+            assert_eq!(p[1] & 0x80 != 0, k == 2);
+        }
+        assert!(packets[3].ends_with(&hex("000003000014000b4007800438000003022000001b")));
+        assert_eq!(pk.next_don(), 0x1236);
+        assert_eq!(pk.frame_count(), 1);
     }
 
     #[test]

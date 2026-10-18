@@ -145,10 +145,10 @@ impl Sender {
         }
         self.rtp_ts = rtp_timestamp(self.start.elapsed(), self.ts_offset);
         let (mut bytes, mut errors) = (0u64, 0u64);
-        for mut pkt in self.pk.packetize(&tiles, self.rtp_ts) {
+        self.pk.packetize_each(&tiles, self.rtp_ts, |mut pkt| {
             if self.tx.protect_rtp(&mut pkt).is_err() {
                 errors += 1;
-                continue;
+                return;
             }
             self.packets = self.packets.wrapping_add(1);
             self.octets = self.octets.wrapping_add(pkt.len() as u32);
@@ -164,7 +164,7 @@ impl Sender {
                     );
                 }
             }
-        }
+        });
         let now = monotonic_now();
         let mut st = self.stats.lock().unwrap();
         st.frames_window += 1;
