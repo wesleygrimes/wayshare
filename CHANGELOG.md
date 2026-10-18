@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.0 - 2026-10-18
+
+### Breaking changes
+
+- Re-running the install command no longer restarts the service. Coming from 0.1.5 or older, run the install command, then `wayshare restart`. From now on, `wayshare upgrade` downloads and restarts in one step. ([#41](https://github.com/wesleygrimes/wayshare/pull/41))
+- `wayshare install-service` is gone. `wayshare setup` writes the service for you; units written by earlier versions keep working. ([#41](https://github.com/wesleygrimes/wayshare/pull/41))
+- Without `output` in the config, wayshare now shares your monitor when you have exactly one, and won't start when you have several. It used to serve a test pattern. `--test-pattern` brings that back for development. ([#41](https://github.com/wesleygrimes/wayshare/pull/41))
+
+### Features
+
+- `wayshare setup` walks you through the password, the monitor and which network to listen on, such as Tailscale only. It starts the service, offers to add a ufw rule with sudo, and prints what to enter on the Mac. Running it again keeps your current choices as the defaults. ([#41](https://github.com/wesleygrimes/wayshare/pull/41))
+- `wayshare doctor` checks Hyprland, the monitor, the password, the service, the port, ufw and the High Performance encoder, and says how to fix each problem. ([#41](https://github.com/wesleygrimes/wayshare/pull/41))
+- `wayshare start`, `stop`, `restart`, `upgrade` and `uninstall` manage the service without `systemctl`. ([#41](https://github.com/wesleygrimes/wayshare/pull/41))
+- `wayshare set-password` uses your Linux user name unless you pass `--user`. ([#41](https://github.com/wesleygrimes/wayshare/pull/41))
+
+### Documentation
+
+- A new security page covers what's encrypted, which ports to open, and limiting access to Tailscale or a VPN. ([#40](https://github.com/wesleygrimes/wayshare/pull/40), [#41](https://github.com/wesleygrimes/wayshare/pull/41))
+- The README's setup section is now `wayshare setup`, and the guides that the new commands replace are shorter or gone. ([#41](https://github.com/wesleygrimes/wayshare/pull/41))
+
+**Full changelog**: [v0.1.5...v0.2.0](https://github.com/wesleygrimes/wayshare/compare/v0.1.5...v0.2.0)
+
 ## 0.1.5 - 2026-10-17
 
 ### Fixes
