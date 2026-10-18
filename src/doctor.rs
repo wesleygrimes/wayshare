@@ -40,12 +40,7 @@ impl Report {
         match (self.failed, self.warned) {
             (0, 0) => ui::heading("Everything looks good."),
             (0, w) => ui::heading(&format!("No problems; {w} warning{}.", plural(w))),
-            (f, _) => println!(
-                "\n{}",
-                console::style(format!("{f} problem{} found.", plural(f)))
-                    .color256(204)
-                    .bold()
-            ),
+            (f, _) => ui::alert(&format!("{f} problem{} found.", plural(f))),
         }
         println!();
     }

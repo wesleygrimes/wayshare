@@ -31,6 +31,7 @@ pub fn run() -> Result<()> {
             .affirmative("Change")
             .negative("Keep")
             .selected(false)
+            .theme(crate::ui::theme())
             .run()?
     {
         let password = prompt_password(&format!(
@@ -116,6 +117,7 @@ fn firewall_step(
         ))
         .affirmative("Add rule")
         .negative("Skip")
+        .theme(crate::ui::theme())
         .run()?;
     if !add {
         ui::warn("Firewall", "skipped; the Mac may not be able to connect");
@@ -179,8 +181,12 @@ fn prompt_password(description: &str) -> Result<Vec<u8>> {
                     Ok(())
                 }
             })
+            .theme(crate::ui::theme())
             .run()?;
-        let b = Input::new("Confirm password").password(true).run()?;
+        let b = Input::new("Confirm password")
+            .password(true)
+            .theme(crate::ui::theme())
+            .run()?;
         if a == b {
             return Ok(a.into_bytes());
         }
@@ -216,6 +222,7 @@ fn choose_output(outputs: &[OutputInfo], current: Option<&str>) -> Result<String
     Ok(Select::new("Monitor")
         .description("The screen your Mac will see")
         .options(options)
+        .theme(crate::ui::theme())
         .run()?)
 }
 
@@ -244,6 +251,7 @@ fn choose_listen(current: SocketAddr, addrs: &[InterfaceAddr]) -> Result<SocketA
             "Where wayshare listens for your Mac. Pick tailscale0 to allow only Tailscale.",
         )
         .options(options)
+        .theme(crate::ui::theme())
         .run()?)
 }
 

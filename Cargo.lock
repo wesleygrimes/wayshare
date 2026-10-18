@@ -1439,6 +1439,7 @@ dependencies = [
  "sha2",
  "socket2",
  "subtle",
+ "termcolor",
  "tokio",
  "toml",
  "tracing",

@@ -150,6 +150,7 @@ pub fn uninstall() -> Result<()> {
         .affirmative("Remove")
         .negative("Cancel")
         .selected(false)
+        .theme(crate::ui::theme())
         .run()?;
     if !remove {
         return Ok(());
