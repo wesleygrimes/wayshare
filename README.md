@@ -1,74 +1,109 @@
 # wayshare
 
-Share your Hyprland desktop with a Mac, using the Screen Sharing app it already has.
-wayshare speaks Apple's Screen Sharing protocol, so there's nothing to install on the Mac.
+Share your Hyprland desktop with your Mac.
 
-- The Mac's ⌘ key sends Super, so your Hyprland and Omarchy shortcuts work as usual.
-- Copy and paste text, rich text and images in both directions.
-- Screen Sharing's High Performance mode works, for sharp, low-latency video and sound.
+Connect through the Mac's built-in Screen Sharing app. Nothing to install on macOS.
 
-![An Omarchy desktop shared to a Mac with Screen Sharing](docs/media/screenshot.jpg)
+- Use your Hyprland and Omarchy shortcuts. Command sends Super.
+- Copy and paste text, rich text, and images between machines.
+- Use High Performance mode for low-latency video and sound.
 
-Needs Hyprland 0.56 or newer and systemd.
+<img src="docs/media/screenshot.jpg" alt="An Omarchy desktop open in the Mac's Screen Sharing app" width="720">
 
-## Demo
-
-![wayshare demo](https://github.com/user-attachments/assets/b43a3ae0-370d-4816-958b-87a16504bd8a)
+[Watch the 40-second demo](https://github.com/user-attachments/assets/b43a3ae0-370d-4816-958b-87a16504bd8a)
 
 ## Install
+
+Install on your Hyprland machine. Requires Hyprland 0.56 or newer and systemd.
+Builds are available for x86_64 and ARM64.
+
+### Install script
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/wesleygrimes/wayshare/main/install.sh | sh
 ```
 
-This puts `wayshare` in `~/.local/bin`, without sudo.
-Builds are for x86_64 and ARM64.
+Installs to `~/.local/bin`. No sudo required.
 
-Other ways to install:
+### Install with mise
 
-- With [mise](https://mise.jdx.dev): `mise use -g github:wesleygrimes/wayshare`
-- [From source](docs/development.md#installing-from-source)
+If you use [mise](https://mise.jdx.dev), run:
 
-## Set up
+```sh
+mise use -g github:wesleygrimes/wayshare
+```
 
-Run this in a terminal on your Hyprland desktop:
+To build it yourself, see [Build from source](docs/development.md#installing-from-source).
+
+## Configure
+
+Run this in a terminal inside your Hyprland session:
 
 ```sh
 wayshare setup
 ```
 
-It asks for a password, which monitor to share and which network to listen on. Then it
-starts the service and tells you what to type on the Mac. If ufw is blocking the port, it
-offers to add a rule for you, using sudo. Not on Omarchy? If wayshare doesn't come back
-after you log in again, add [one line to `hyprland.conf`](docs/troubleshooting.md#the-service-doesnt-start-at-login).
+Choose a password, the monitor to share, and the network to accept connections on.
+Setup saves your choices, starts wayshare, and displays the address and username for
+your Mac.
 
-On the Mac, connect with the **Screen Sharing** app and pick **High Performance** when it
-asks, for sharper, low-latency video and sound.
+If ufw blocks the connection, setup offers to add a firewall rule using sudo.
 
-Something not working? Run `wayshare doctor`. It checks each piece and tells you how to fix
-what's missing. [Troubleshooting](docs/troubleshooting.md) covers the rest.
+Run `wayshare setup` again to change these choices. For
+[other settings](docs/configuration.md), edit `~/.config/wayshare/config.toml`, then run:
+
+```sh
+wayshare restart
+```
+
+## Connect from your Mac
+
+1. Open **Screen Sharing**.
+2. Choose **Connection → New** and enter the address shown by setup.
+3. Sign in with the username shown by setup and the password you chose.
+4. Select **High Performance** when prompted.
+
+For connection or startup problems, run `wayshare doctor` and see
+[Troubleshooting](docs/troubleshooting.md).
+
+## Documentation
+
+- [Configuration](docs/configuration.md): display, keyboard, network, and other settings
+- [High Performance mode](docs/high-performance.md): encoders and audio requirements
+- [Security](docs/security.md): encryption, ports, and VPN access
+- [Troubleshooting](docs/troubleshooting.md): connection problems, startup, and logs
+- [Packaging](docs/packaging.md): install layout and dependencies
+- [Development](docs/development.md): building and testing
 
 ## Commands
 
-| Command | Does |
+| Command | What it does |
 |---|---|
-| `wayshare setup` | set up or change the password, monitor and network |
-| `wayshare doctor` | check the setup and say how to fix problems |
-| `wayshare start`, `stop`, `restart` | control the service; restart after editing the config |
-| `wayshare upgrade` | install the latest release and restart |
-| `wayshare uninstall` | stop the service and remove wayshare; keeps `~/.config/wayshare` |
+| `wayshare setup` | Set up or change the password, monitor, and network |
+| `wayshare doctor` | Check the setup and explain how to fix problems |
+| `wayshare start` | Start the service |
+| `wayshare stop` | Stop the service |
+| `wayshare restart` | Restart the service after configuration changes |
 
-Coming from 0.1.5 or older, which has no `upgrade`, run the install command again, then
-`wayshare restart`. With mise, run `wayshare uninstall` before `mise uninstall`.
+### Upgrade
 
-## More
+```sh
+wayshare upgrade
+```
 
-- [Configuration](docs/configuration.md): every setting, exclusive display, keyboard mapping, the sidebar name
-- [High Performance mode](docs/high-performance.md): what it needs, encoders, audio
-- [Security](docs/security.md): what's encrypted, ports, and using Tailscale or a VPN
-- [Troubleshooting](docs/troubleshooting.md): logs and the usual problems
-- [Packaging](docs/packaging.md): install layout and dependencies, for distro packagers
-- [Development](docs/development.md): building, tests, live checks
+Installs the latest release and restarts the service.
+
+For version 0.1.5 or older, run the install command again, then `wayshare restart`.
+
+### Uninstall
+
+```sh
+wayshare uninstall
+```
+
+Stops the service and removes wayshare. Keeps `~/.config/wayshare`.
+
+With mise, run `wayshare uninstall` before `mise uninstall`.
 
 ## Contributors
 
