@@ -10,7 +10,12 @@ Connect through the Mac's built-in Screen Sharing app. Nothing to install on mac
 
 <img src="docs/media/screenshot.jpg" alt="An Omarchy desktop open in the Mac's Screen Sharing app" width="720">
 
-[Watch the 40-second demo](https://github.com/user-attachments/assets/b43a3ae0-370d-4816-958b-87a16504bd8a)
+<details>
+<summary>Watch the 40-second demo</summary>
+
+https://github.com/user-attachments/assets/b43a3ae0-370d-4816-958b-87a16504bd8a
+
+</details>
 
 ## Install
 
