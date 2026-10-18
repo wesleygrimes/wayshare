@@ -98,7 +98,6 @@ pub fn run() -> Result<()> {
     }
     println!();
     ui::line(&ui::dim("Trouble connecting? Run `wayshare doctor`."));
-    println!();
     Ok(())
 }
 

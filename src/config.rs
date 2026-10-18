@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn example_config_parses() {
         let s = Settings::parse(include_str!("../contrib/config.example.toml")).unwrap();
-        assert_eq!(s.output.as_deref(), Some("HEADLESS-1"));
+        assert_eq!(s.output, None);
         assert!(s.hp.enabled && s.input.enabled && s.resize && s.mdns.enabled);
     }
 

@@ -42,7 +42,6 @@ impl Report {
             (0, w) => ui::heading(&format!("No problems; {w} warning{}.", plural(w))),
             (f, _) => ui::alert(&format!("{f} problem{} found.", plural(f))),
         }
-        println!();
     }
 }
 
