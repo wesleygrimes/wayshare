@@ -25,11 +25,13 @@ password or any other important one.
 
 ## Only accept connections over Tailscale
 
-Set `listen` to the machine's Tailscale address (`tailscale ip -4` prints it) in
-`~/.config/wayshare/config.toml`:
+`wayshare setup` asks which network to listen on; pick `tailscale0`. Or set `listen` to the
+machine's Tailscale address (`tailscale ip -4` prints it) in `~/.config/wayshare/config.toml`:
 
 ```toml
 listen = "100.101.102.103:5900"
 ```
 
 wayshare then refuses connections from your local network and only answers over Tailscale.
+Tailscale has to be up before wayshare starts. If it isn't, wayshare can't listen on the
+address and the service fails; run `systemctl --user restart wayshare` once Tailscale is up.

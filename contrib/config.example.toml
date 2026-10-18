@@ -1,10 +1,10 @@
 # $XDG_CONFIG_HOME/wayshare/config.toml (usually ~/.config/wayshare/config.toml).
 # Every key is optional; the values shown are the defaults unless noted.
 
-listen = "0.0.0.0:5900"
+listen = "0.0.0.0:5900"               # one address, e.g. Tailscale's, to listen only there
 # name = "omarchy"                    # default: the host name
 # srp_file = "/home/alice/.config/wayshare/srp-alice"   # default: srp-$USER next to this file
-output = "HEADLESS-1"                 # default: unset (test pattern)
+output = "HEADLESS-1"                 # default: the only enabled monitor
 resize = true                         # match the viewer's display mode, restore afterwards
 
 [hp]

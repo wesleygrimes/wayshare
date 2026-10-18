@@ -1,6 +1,9 @@
 # Troubleshooting
 
-Start with the log:
+Start with `wayshare doctor`. It checks Hyprland, the monitor, the password, the service,
+the port, ufw and the High Performance encoder, and says how to fix each failure.
+
+For anything it doesn't catch, read the log:
 
 ```sh
 journalctl --user -u wayshare -f
@@ -15,6 +18,11 @@ Hyprland through UWSM reach that target; a plain `Hyprland` launch doesn't. Star
 ```
 exec-once = systemctl --user start wayshare
 ```
+
+## "no output set and there are 2 monitors"
+
+wayshare only picks a monitor for you when there's one. Run `wayshare setup` to choose, or
+set `output` in the config.
 
 ## "wayshare needs Hyprland 0.56 or newer"
 
@@ -31,7 +39,7 @@ Upgrade Hyprland to 0.56 or newer.
 Set it again and restart:
 
 ```sh
-wayshare set-password --user "$USER"
+wayshare set-password
 systemctl --user restart wayshare
 ```
 

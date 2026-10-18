@@ -34,37 +34,26 @@ wayshare isn't on the AUR or in `omarchy pkg` yet. Those packages are coming soo
 
 ## Set up
 
-1. Pick a password. Screen Sharing asks for this user name and password when you connect.
+Run this in a terminal on your Hyprland desktop:
 
-   ```sh
-   wayshare set-password --user "$USER"
-   ```
+```sh
+wayshare setup
+```
 
-2. Tell wayshare which monitor to share. `hyprctl monitors` lists them; replace `DP-1` with
-   yours.
+It asks for a password, which monitor to share and which network to listen on. Then it
+starts the service and tells you what to type on the Mac. If ufw is on, it also prints the
+rule that lets the Mac in. Not on Omarchy? If wayshare doesn't come back after you log in
+again, add [one line to `hyprland.conf`](docs/troubleshooting.md#the-service-doesnt-start-at-login).
 
-   ```sh
-   mkdir -p ~/.config/wayshare
-   echo 'output = "DP-1"' > ~/.config/wayshare/config.toml
-   ```
+On the Mac, open the **Screen Sharing** app (search for it with Spotlight), choose
+**Connection > New** and enter the address setup printed. Sign in with your Linux user name
+and the password you picked. For sharper, low-latency video and sound, pick **High
+Performance** when it asks (see [High Performance mode](docs/high-performance.md)).
 
-3. Start it with your session:
+The machine also shows up in Finder's sidebar under **Network**.
 
-   ```sh
-   systemctl --user enable --now wayshare
-   ```
-
-   On Omarchy that's all. Elsewhere, if wayshare doesn't come back after you log in again,
-   add [one line to `hyprland.conf`](docs/troubleshooting.md#the-service-doesnt-start-at-login).
-
-4. On the Mac, open the **Screen Sharing** app (search for it with Spotlight), choose
-   **Connection > New** and enter the Linux machine's address, like `192.168.1.20`. Sign in
-   with the password from step 1. To get sharper, low-latency video and sound, pick
-   **High Performance** when it asks (see [High Performance mode](docs/high-performance.md)).
-
-   The machine also shows up in Finder's sidebar under **Network**.
-
-Connection trouble? See [Troubleshooting](docs/troubleshooting.md).
+Something not working? Run `wayshare doctor`. It checks each piece and tells you how to fix
+what's missing. [Troubleshooting](docs/troubleshooting.md) covers the rest.
 
 ## Upgrade
 

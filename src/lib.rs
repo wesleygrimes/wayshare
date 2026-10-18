@@ -6,6 +6,7 @@ pub mod clipboard;
 pub mod config;
 pub mod cursor;
 pub mod display;
+pub mod doctor;
 pub mod encode;
 pub mod hp;
 pub mod input;
@@ -14,4 +15,5 @@ pub mod rfb;
 #[cfg(target_os = "linux")]
 pub mod server_linux;
 pub mod service;
+pub mod setup;
 pub mod source;

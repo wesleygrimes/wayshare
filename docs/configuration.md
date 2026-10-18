@@ -14,19 +14,25 @@ After changing anything, restart: `systemctl --user restart wayshare`.
 ```toml
 output = "DP-1"          # the monitor to share; `hyprctl monitors` lists them
 name = "studio"          # how the machine appears on the Mac; default: the host name
-listen = "0.0.0.0:5900"
+listen = "0.0.0.0:5900"  # all networks; use one address to listen only there
 resize = true            # match the Mac's window size, restore the monitor afterwards
 ```
 
-Without `output`, wayshare serves a test pattern instead of your screen.
+Without `output`, wayshare shares your monitor if you have only one. With more than one it
+won't start until you pick one. `wayshare --test-pattern` serves a moving test image
+instead, for development.
+
+To listen on a single network, such as Tailscale, set `listen` to that interface's address.
+See [Security](security.md#only-accept-connections-over-tailscale).
 
 With `resize` on, wayshare switches the shared monitor to the mode the Mac asks for while
 you're connected, and puts it back when you disconnect.
 
 ## Login
 
-`wayshare set-password --user NAME` stores a salted verifier, never the password, in
-`srp-NAME` next to the config file. Run it again to change the password.
+`wayshare set-password` stores a salted verifier, never the password, in `srp-$USER` next to
+the config file. Run it again to change the password. `--user NAME` sets a different login
+name and writes `srp-NAME`.
 
 wayshare looks for `srp-$USER` unless told otherwise, so a login name other than your Linux
 user name needs `srp_file` too:

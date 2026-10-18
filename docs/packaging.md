@@ -21,8 +21,8 @@ install -Dm644 wayshare.service "$pkgdir/usr/lib/systemd/user/wayshare.service"
 install -Dm644 contrib/config.example.toml "$pkgdir/usr/share/doc/wayshare/config.example.toml"
 ```
 
-Don't enable the unit globally. Each user runs `systemctl --user enable --now wayshare` after
-setting a password.
+Don't enable the unit globally. Each user runs `wayshare setup`, which sets a password,
+writes their config and enables the unit.
 
 ## Dependencies
 

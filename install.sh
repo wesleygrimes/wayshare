@@ -40,11 +40,15 @@ main() {
   "$dir/wayshare" install-service
   systemctl --user try-restart wayshare 2>/dev/null || true
 
+  cmd=wayshare
   case :$PATH: in
     *:"$dir":*) ;;
-    *) echo "Add $dir to your PATH to run wayshare from a shell." ;;
+    *)
+      echo "Add $dir to your PATH to run wayshare from a shell."
+      cmd=$dir/wayshare
+      ;;
   esac
-  echo "Next, set it up: https://github.com/$repo#set-up"
+  echo "Next, run: $cmd setup"
 }
 
 fail() {
