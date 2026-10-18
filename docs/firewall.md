@@ -12,3 +12,5 @@ With ufw, allowing your local network (adjust the range to yours):
 sudo ufw allow from 192.168.1.0/24 to any port 5900 proto tcp
 sudo ufw allow from 192.168.1.0/24 to any port 5353 proto udp
 ```
+
+Don't open these ports to the internet. See [Security](security.md) for remote access.

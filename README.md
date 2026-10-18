@@ -91,6 +91,7 @@ stay in your config directory (usually `~/.config/wayshare`) until you delete it
 - [Configuration](docs/configuration.md): every setting, keyboard mapping, the sidebar name
 - [High Performance mode](docs/high-performance.md): what it needs, encoders, audio
 - [Firewall](docs/firewall.md): which ports to open
+- [Security](docs/security.md): what's encrypted, and using Tailscale or a VPN
 - [Troubleshooting](docs/troubleshooting.md): logs and the usual problems
 - [Packaging](docs/packaging.md): install layout and dependencies, for distro packagers
 - [Development](docs/development.md): building, tests, live checks
