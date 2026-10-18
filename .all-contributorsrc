@@ -73,6 +73,15 @@
       "contributions": [
         "userTesting"
       ]
+    },
+    {
+      "login": "bndnsmth",
+      "name": "Brandon Smith",
+      "avatar_url": "https://avatars.githubusercontent.com/u/4730164?v=4",
+      "profile": "https://github.com/bndnsmth",
+      "contributions": [
+        "code"
+      ]
     }
   ],
   "commitType": "docs"
