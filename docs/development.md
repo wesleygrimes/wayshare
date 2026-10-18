@@ -25,7 +25,7 @@ wayshare install-service
 ```
 
 This puts `wayshare` in `~/.cargo/bin` and its unit in `~/.local/share/systemd/user`. To
-upgrade, run both again, then `systemctl --user restart wayshare`.
+upgrade, run both again, then `wayshare restart`.
 
 ## mise
 

@@ -21,16 +21,13 @@ Needs Hyprland 0.56 or newer and systemd.
 curl -fsSL https://raw.githubusercontent.com/wesleygrimes/wayshare/main/install.sh | sh
 ```
 
-This puts `wayshare` in `~/.local/bin` and sets up its systemd user service, without sudo.
+This puts `wayshare` in `~/.local/bin`, without sudo.
 Builds are for x86_64 and ARM64.
 
 Other ways to install:
 
-- With [mise](https://mise.jdx.dev): `mise use -g github:wesleygrimes/wayshare`, then
-  `wayshare install-service`
+- With [mise](https://mise.jdx.dev): `mise use -g github:wesleygrimes/wayshare`
 - [From source](docs/development.md#installing-from-source)
-
-wayshare isn't on the AUR or in `omarchy pkg` yet. Those packages are coming soon.
 
 ## Set up
 
@@ -57,23 +54,28 @@ what's missing. [Troubleshooting](docs/troubleshooting.md) covers the rest.
 
 ## Upgrade
 
-Run the install command again. It restarts the service for you.
-
-With mise or a package, upgrade the usual way, then restart the service:
-
 ```sh
-systemctl --user restart wayshare
+wayshare upgrade
 ```
+
+This installs the latest release and restarts the service. If you installed with mise, it
+tells you the mise command instead. Coming from 0.1.5 or older, which has no `upgrade`, run
+the install command again, then `wayshare restart`.
+
+## Start, stop and restart
+
+`wayshare start`, `wayshare stop` and `wayshare restart` control the service. Restart after
+changing the config.
 
 ## Uninstall
 
 ```sh
-systemctl --user disable --now wayshare
-rm -f ~/.local/bin/wayshare ~/.local/share/systemd/user/wayshare.service
+wayshare uninstall
 ```
 
-If you installed with mise or a package, remove it that way too. Your password and settings
-stay in your config directory (usually `~/.config/wayshare`) until you delete it.
+This stops the service and removes wayshare. With mise, run it before `mise uninstall`, since
+mise can't stop the service for you. Your password and settings stay in `~/.config/wayshare`
+until you delete it.
 
 ## More
 

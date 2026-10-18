@@ -34,4 +34,4 @@ listen = "100.101.102.103:5900"
 
 wayshare then refuses connections from your local network and only answers over Tailscale.
 Tailscale has to be up before wayshare starts. If it isn't, wayshare can't listen on the
-address and the service fails; run `systemctl --user restart wayshare` once Tailscale is up.
+address and the service fails; run `wayshare restart` once Tailscale is up.

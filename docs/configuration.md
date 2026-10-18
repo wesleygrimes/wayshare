@@ -7,7 +7,7 @@ A full example with every key lives in
 [`contrib/config.example.toml`](../contrib/config.example.toml), and packages install it to
 `/usr/share/doc/wayshare/`.
 
-After changing anything, restart: `systemctl --user restart wayshare`.
+After changing anything, run `wayshare restart`.
 
 ## The basics
 

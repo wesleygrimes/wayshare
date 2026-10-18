@@ -128,6 +128,16 @@ enum Command {
     Setup,
     /// Check the setup and say how to fix what's missing.
     Doctor,
+    /// Start the service.
+    Start,
+    /// Stop the service.
+    Stop,
+    /// Restart the service, for example after changing the config.
+    Restart,
+    /// Install the latest release (install.sh installs) and restart the service.
+    Upgrade,
+    /// Stop the service and remove wayshare. Keeps your config and password.
+    Uninstall,
     /// Store an SRP verifier (salt, iterations, v) for a user. The password is not stored.
     SetPassword {
         /// Defaults to $USER.
@@ -158,6 +168,11 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::Setup) => return wayshare::setup::run(),
+        Some(Command::Start) => return wayshare::service::systemctl(&["start", "wayshare"]),
+        Some(Command::Stop) => return wayshare::service::systemctl(&["stop", "wayshare"]),
+        Some(Command::Restart) => return wayshare::service::systemctl(&["restart", "wayshare"]),
+        Some(Command::Upgrade) => return wayshare::service::upgrade(),
+        Some(Command::Uninstall) => return wayshare::service::uninstall(),
         Some(Command::Doctor) => {
             if !wayshare::doctor::run()? {
                 std::process::exit(1);

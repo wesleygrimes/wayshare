@@ -11,6 +11,7 @@ use crate::config::{Settings, config_dir};
 use crate::display::hyprland::Hyprland;
 use crate::display::{DisplayManager, OutputInfo};
 use crate::rfb::srp::{self, VerifierRecord};
+use crate::service::systemctl;
 
 pub fn run() -> Result<()> {
     let mut hypr =
@@ -128,7 +129,7 @@ fn ask(prompt: &str) -> Result<String> {
     Ok(line.trim().to_string())
 }
 
-fn ask_yes_no(prompt: &str) -> Result<bool> {
+pub fn ask_yes_no(prompt: &str) -> Result<bool> {
     let a = ask(&format!("{prompt} [y/N]"))?;
     Ok(matches!(a.to_ascii_lowercase().as_str(), "y" | "yes"))
 }
@@ -236,18 +237,6 @@ pub fn set_top_level_key(text: &str, key: &str, value: &str) -> String {
         out.push(line);
     }
     out.join("\n") + "\n"
-}
-
-fn systemctl(args: &[&str]) -> Result<()> {
-    let status = Command::new("systemctl")
-        .arg("--user")
-        .args(args)
-        .status()
-        .context("running systemctl")?;
-    if !status.success() {
-        bail!("systemctl --user {} failed", args.join(" "));
-    }
-    Ok(())
 }
 
 fn unit_loaded() -> bool {

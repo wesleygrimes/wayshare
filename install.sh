@@ -37,18 +37,12 @@ main() {
   mkdir -p "$dir"
   install -m755 "$name/wayshare" "$dir/wayshare"
   echo "Installed $("$dir/wayshare" --version) to $dir/wayshare"
-  "$dir/wayshare" install-service
-  systemctl --user try-restart wayshare 2>/dev/null || true
 
-  cmd=wayshare
   case :$PATH: in
     *:"$dir":*) ;;
-    *)
-      echo "Add $dir to your PATH to run wayshare from a shell."
-      cmd=$dir/wayshare
-      ;;
+    *) echo "Add $dir to your PATH to run wayshare from a shell." ;;
   esac
-  echo "Next, run: $cmd setup"
+  echo "Next, run: wayshare setup"
 }
 
 fail() {

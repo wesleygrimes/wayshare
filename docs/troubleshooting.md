@@ -40,7 +40,7 @@ Set it again and restart:
 
 ```sh
 wayshare set-password
-systemctl --user restart wayshare
+wayshare restart
 ```
 
 ## No High Performance
