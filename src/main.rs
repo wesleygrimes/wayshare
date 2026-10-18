@@ -124,7 +124,7 @@ impl ServeArgs {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Pick a password and a monitor, then start the service.
+    /// Pick a password, monitor and network, then start the service.
     Setup,
     /// Check the setup and say how to fix what's missing.
     Doctor,
