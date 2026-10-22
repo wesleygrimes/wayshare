@@ -149,6 +149,7 @@ fn stream(dest: &str, secs: u64) -> Result<()> {
         recv_key: [9; MASTER_LEN],
         encoder: Default::default(),
         device: None,
+        mute_local: false,
     })?;
     s.activate();
     std::thread::sleep(Duration::from_secs(secs));

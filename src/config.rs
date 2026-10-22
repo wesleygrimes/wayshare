@@ -40,6 +40,8 @@ pub struct HpSettings {
     pub chroma: Chroma,
     /// Stream the default sink's monitor to the viewer.
     pub audio: bool,
+    /// Mute this machine's speakers while a viewer receives audio. Unmuted when the stream stops.
+    pub mute_local: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -116,6 +118,7 @@ impl Default for HpSettings {
             encoder: Encoder::Auto,
             chroma: Chroma::Yuv420,
             audio: true,
+            mute_local: false,
         }
     }
 }
@@ -248,7 +251,7 @@ mod tests {
         let s = Settings::parse("").unwrap();
         assert_eq!(s, Settings::default());
         assert!(s.hp.enabled && s.input.enabled && s.resize && s.mdns.enabled);
-        assert!(!s.exclusive);
+        assert!(!s.exclusive && !s.hp.mute_local);
         assert_eq!(s.listen.port(), 5900);
         assert_eq!(s.keyboard().unwrap().command, ModTarget::Super);
     }
@@ -269,6 +272,7 @@ mod tests {
             bitrate = 30000000
             encoder = "vaapi"
             chroma = "420"
+            mute_local = true
             [input]
             command_key = "super"
             option_key = "altgr"
@@ -282,7 +286,7 @@ mod tests {
         .unwrap();
         assert_eq!(s.output.as_deref(), Some("HEADLESS-1"));
         assert!(!s.resize && !s.hp.enabled && s.dev.hp_swap_keys);
-        assert!(s.exclusive);
+        assert!(s.exclusive && s.hp.mute_local);
         assert_eq!((s.hp.port, s.hp.bitrate), (6000, Some(30_000_000)));
         let k = s.keyboard().unwrap();
         assert_eq!(
