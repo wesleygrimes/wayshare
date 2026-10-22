@@ -462,6 +462,7 @@ mod tests {
             disabled,
             transform: 0,
             active_workspace: None,
+            available_modes: Vec::new(),
         }
     }
 

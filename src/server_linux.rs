@@ -488,8 +488,30 @@ impl crate::rfb::DisplayControl for HyprDisplay {
         let Some(pref) = request.displays.first().and_then(|d| d.preferred()) else {
             return Ok(None);
         };
-        let mode = pref.display_mode();
         let mut hypr = crate::display::hyprland::Hyprland::from_env()?;
+        let current = hypr
+            .outputs()?
+            .into_iter()
+            .find(|o| o.name == self.output)
+            .with_context(|| format!("output {} not found", self.output))?;
+        let requested = pref.display_mode();
+        // A physical panel given a custom mode it can't drive shows a garbled picture and
+        // loses its cursor, so only use sizes the monitor advertises.
+        let mode = if crate::display::hyprland::is_drm_connector(&self.output) {
+            match crate::display::supported_mode(&current.available_modes, &requested) {
+                Some(mode) => mode,
+                None => {
+                    info!(
+                        output = %self.output,
+                        ?requested,
+                        "monitor does not support the requested size; not resizing"
+                    );
+                    return Ok(None);
+                }
+            }
+        } else {
+            requested
+        };
         {
             let mut owner = self.owner.lock().unwrap();
             match &*owner {
@@ -501,14 +523,7 @@ impl crate::rfb::DisplayControl for HyprDisplay {
                     return Ok(None);
                 }
                 Some(_) => {}
-                None => {
-                    let current = hypr
-                        .outputs()?
-                        .into_iter()
-                        .find(|o| o.name == self.output)
-                        .with_context(|| format!("output {} not found", self.output))?;
-                    *owner = Some((session, current));
-                }
+                None => *owner = Some((session, current)),
             }
         }
         let actual = hypr.set_mode(&self.output, &mode)?;
@@ -573,6 +588,7 @@ mod tests {
                     disabled: false,
                     transform: 0,
                     active_workspace: None,
+                    available_modes: Vec::new(),
                 }],
                 workspaces: Vec::new(),
             })
