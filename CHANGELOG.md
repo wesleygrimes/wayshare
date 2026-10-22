@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2 - 2026-10-22
+
+### Fixes
+
+- High Performance mode now updates the viewer's display size when the shared output changes size outside wayshare. ([#54](https://github.com/wesleygrimes/wayshare/pull/54))
+- VA-API encoding now converts through video processing when the driver exports an implicit surface layout. ([#59](https://github.com/wesleygrimes/wayshare/pull/59))
+
+### Maintenance
+
+- New and reopened issues are assigned to the maintainer automatically. ([#61](https://github.com/wesleygrimes/wayshare/pull/61))
+
+**Full changelog**: [v0.2.1...v0.2.2](https://github.com/wesleygrimes/wayshare/compare/v0.2.1...v0.2.2)
+
 ## 0.2.1 - 2026-10-18
 
 ### Fixes
