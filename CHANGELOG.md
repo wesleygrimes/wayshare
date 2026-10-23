@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.3 - 2026-10-23
+
+### Fixes
+
+- Updates ctutils to 0.4.4 for RUSTSEC-2026-0385, which could leak secret values through timing. wayshare uses it through its hashing libraries. ([#65](https://github.com/wesleygrimes/wayshare/pull/65))
+
+### Maintenance
+
+- Updates libc, mdns-sd and plist to their latest patch releases. ([#64](https://github.com/wesleygrimes/wayshare/pull/64))
+
+**Full changelog**: [v0.2.2...v0.2.3](https://github.com/wesleygrimes/wayshare/compare/v0.2.2...v0.2.3)
+
 ## 0.2.2 - 2026-10-22
 
 ### Fixes
