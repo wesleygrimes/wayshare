@@ -22,6 +22,17 @@ https://github.com/user-attachments/assets/b43a3ae0-370d-4816-958b-87a16504bd8a
 Install on your Hyprland machine. Requires Hyprland 0.56 or newer and systemd.
 Builds are available for x86_64 and ARM64.
 
+### Install on Omarchy
+
+wayshare is in the Omarchy package repository:
+
+```sh
+omarchy pkg add wayshare
+```
+
+For now the package is only on Omarchy's edge channel. It reaches stable when Omarchy
+promotes it. Until then, `pacman -Si wayshare` on stable says it isn't found.
+
 ### Install script
 
 ```sh
@@ -100,6 +111,9 @@ Installs the latest release and restarts the service.
 
 For version 0.1.5 or older, run the install command again, then `wayshare restart`.
 
+On Omarchy, `omarchy update` upgrades wayshare with the rest of the system. Then run
+`wayshare restart`.
+
 ### Uninstall
 
 ```sh
@@ -109,6 +123,8 @@ wayshare uninstall
 Stops the service and removes wayshare. Keeps `~/.config/wayshare`.
 
 With mise, run `wayshare uninstall` before `mise uninstall`.
+
+On Omarchy, run `wayshare uninstall`, then `omarchy pkg drop wayshare`.
 
 ## Contributors
 
