@@ -146,6 +146,7 @@ Thanks to these people ([emoji key](https://allcontributors.org/docs/en/emoji-ke
     </tr>
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/ChachizR"><img src="https://avatars.githubusercontent.com/u/51926047?v=4?s=100" width="100px;" alt="ChachizR"/><br /><sub><b>ChachizR</b></sub></a><br /><a href="https://github.com/wesleygrimes/wayshare/commits?author=ChachizR" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/3j27"><img src="https://avatars.githubusercontent.com/u/346161426?v=4?s=100" width="100px;" alt="3j27"/><br /><sub><b>3j27</b></sub></a><br /><a href="https://github.com/wesleygrimes/wayshare/commits?author=3j27" title="Code">💻</a> <a href="https://github.com/wesleygrimes/wayshare/issues?q=author%3A3j27" title="Bug reports">🐛</a> <a href="#platform-3j27" title="Packaging/porting to new platform">📦</a> <a href="https://github.com/wesleygrimes/wayshare/commits?author=3j27" title="Tests">⚠️</a></td>
     </tr>
   </tbody>
 </table>

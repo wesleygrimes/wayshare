@@ -91,6 +91,18 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "3j27",
+      "name": "3j27",
+      "avatar_url": "https://avatars.githubusercontent.com/u/346161426?v=4",
+      "profile": "https://github.com/3j27",
+      "contributions": [
+        "code",
+        "bug",
+        "platform",
+        "test"
+      ]
     }
   ],
   "commitType": "docs"
