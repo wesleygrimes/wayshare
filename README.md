@@ -111,7 +111,7 @@ Installs the latest release and restarts the service.
 
 For version 0.1.5 or older, run the install command again, then `wayshare restart`.
 
-On Omarchy, `omarchy update` upgrades wayshare with the rest of the system. Then run
+On Omarchy, `omarchy-update` upgrades wayshare with the rest of the system. Then run
 `wayshare restart`.
 
 ### Uninstall
