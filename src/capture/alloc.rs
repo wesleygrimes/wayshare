@@ -274,6 +274,10 @@ struct UdmabufCreate {
     size: u64,
 }
 
+fn udmabuf_size(stride: u32, height: u32, page: u64) -> u64 {
+    (u64::from(stride) * u64::from(height)).next_multiple_of(page)
+}
+
 impl Allocator {
     /// Single-plane 32 bpp LINEAR buffer backed by a sealed memfd.
     fn allocate_udmabuf(&mut self, width: u32, height: u32) -> Result<Allocation> {
@@ -287,8 +291,12 @@ impl Allocator {
             );
         }
         let stride = (width * 4).next_multiple_of(256);
-        let page = 4096u64;
-        let size = (stride as u64 * height as u64).next_multiple_of(page);
+        // udmabuf requires the host kernel's page alignment (ARM may use 16 or 64 KiB).
+        // SAFETY: sysconf reads a process-wide constant and takes no pointers.
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        anyhow::ensure!(page > 0, "could not determine kernel page size");
+        let page = page as u64;
+        let size = udmabuf_size(stride, height, page);
         // SAFETY: `memfd` is checked for failure before `OwnedFd` takes sole ownership.
         // `UdmabufCreate` is `repr(C)` with the layout of the kernel's struct udmabuf_create
         // and outlives the ioctl. The returned fd is checked for failure before
@@ -385,6 +393,18 @@ mod tests {
     use super::*;
 
     const TILED: u64 = 0x0100_0000_0000_0001;
+
+    #[test]
+    fn udmabuf_size_uses_kernel_page_alignment() {
+        // This monitor's buffer was 4 KiB aligned but rejected on a 16 KiB ARM kernel.
+        let bytes = 9728u64 * 1506;
+        for page in [4096, 16384, 65536] {
+            let size = udmabuf_size(9728, 1506, page);
+            assert_eq!(size % page, 0);
+            assert!(size >= bytes && size < bytes + page);
+        }
+        assert_ne!(udmabuf_size(9728, 1506, 4096) % 16384, 0);
+    }
 
     #[test]
     fn shm_allocation_rejects_invalid_protocol_sizes() {
