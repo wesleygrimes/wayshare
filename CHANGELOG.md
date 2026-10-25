@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.4 - 2026-10-25
+
+### Fixes
+
+- **capture:** align udmabuf allocations to the kernel page size, which fixes dropped connections on ARM64 kernels with 16 KiB pages ([#68](https://github.com/wesleygrimes/wayshare/pull/68))
+
+### Documentation
+
+- add Omarchy package install to readme ([#67](https://github.com/wesleygrimes/wayshare/pull/67))
+- add 3j27 as a contributor for code, bug, platform, and test ([#69](https://github.com/wesleygrimes/wayshare/pull/69))
+
+Thanks to Wes Grimes, 3j27.
+
+**Full changelog**: [v0.2.3...v0.2.4](https://github.com/wesleygrimes/wayshare/compare/v0.2.3...v0.2.4)
+
 ## 0.2.3 - 2026-10-23
 
 ### Fixes
