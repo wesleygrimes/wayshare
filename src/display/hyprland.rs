@@ -244,6 +244,27 @@ fn supported(version: &str) -> bool {
     }
 }
 
+/// Parses an `availableModes` entry such as `2880x1800@60.00Hz`.
+fn parse_mode(s: &str) -> Option<(u32, u32, f64)> {
+    let (size, hz) = s.strip_suffix("Hz")?.split_once('@')?;
+    let (w, h) = size.split_once('x')?;
+    Some((w.parse().ok()?, h.parse().ok()?, hz.parse().ok()?))
+}
+
+/// True when `output` is a DRM connector (a real panel or monitor), which can only show the
+/// modes it advertises. Headless and nested outputs accept any custom mode, even though
+/// headless ones advertise a placeholder 1920x1080.
+pub fn is_drm_connector(output: &str) -> bool {
+    let suffix = format!("-{output}");
+    std::fs::read_dir("/sys/class/drm").is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with("card") && n.ends_with(&suffix))
+        })
+    })
+}
+
 pub fn parse_monitors(json: &str) -> Result<Vec<OutputInfo>> {
     let v: Value = serde_json::from_str(json).context("monitors JSON")?;
     let arr = v
@@ -278,6 +299,10 @@ pub fn parse_monitors(json: &str) -> Result<Vec<OutputInfo>> {
                 disabled: m["disabled"].as_bool().unwrap_or(false),
                 transform: m["transform"].as_u64().unwrap_or(0) as u32,
                 active_workspace: m["activeWorkspace"]["id"].as_i64(),
+                available_modes: m["availableModes"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|v| parse_mode(v.as_str()?)).collect())
+                    .unwrap_or_default(),
             })
         })
         .collect()
@@ -468,6 +493,8 @@ mod tests {
         );
         assert!(m[0].focused);
         assert_eq!((m[1].name.as_str(), m[1].x), ("ARDTEST-1", 1728));
+        assert_eq!(m[0].available_modes, vec![(1920, 1080, 60.0)]);
+        assert!(m[1].available_modes.is_empty());
         assert!(parse_monitors("{}").is_err());
     }
 
@@ -496,6 +523,9 @@ mod tests {
                         "refreshRate": o.refresh_hz, "scale": o.scale, "x": o.x, "y": o.y,
                         "focused": o.focused, "disabled": o.disabled, "transform": o.transform,
                         "activeWorkspace": { "id": o.active_workspace },
+                        "availableModes": o.available_modes.iter()
+                            .map(|(w, h, hz)| format!("{w}x{h}@{hz:.2}Hz"))
+                            .collect::<Vec<_>>(),
                     })
                 })
                 .collect::<Vec<_>>(),

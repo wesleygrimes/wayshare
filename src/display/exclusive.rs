@@ -131,6 +131,7 @@ mod tests {
             disabled: false,
             transform: 0,
             active_workspace: Some(if x == 0 { 1 } else { 2 }),
+            available_modes: Vec::new(),
         }
     }
 

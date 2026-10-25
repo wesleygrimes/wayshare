@@ -40,6 +40,8 @@ pub struct OutputInfo {
     pub disabled: bool,
     pub transform: u32,
     pub active_workspace: Option<i64>,
+    /// Modes the monitor advertises, as (width, height, refresh_hz).
+    pub available_modes: Vec<(u32, u32, f64)>,
 }
 
 impl OutputInfo {
@@ -59,6 +61,25 @@ pub trait DisplayManager: Send {
     fn set_mode(&mut self, output: &str, mode: &DisplayMode) -> Result<OutputInfo>;
     fn create_headless(&mut self, name: &str) -> Result<()>;
     fn remove_output(&mut self, name: &str) -> Result<()>;
+}
+
+/// Picks the advertised mode with the requested pixel size, preferring the closest refresh.
+/// Returns `None` when the monitor has no mode of that size.
+pub fn supported_mode(modes: &[(u32, u32, f64)], want: &DisplayMode) -> Option<DisplayMode> {
+    modes
+        .iter()
+        .filter(|(w, h, _)| *w == want.width && *h == want.height)
+        .min_by(|a, b| {
+            (a.2 - want.refresh_hz)
+                .abs()
+                .total_cmp(&(b.2 - want.refresh_hz).abs())
+        })
+        .map(|&(width, height, refresh_hz)| DisplayMode {
+            width,
+            height,
+            refresh_hz,
+            scale: want.scale,
+        })
 }
 
 /// Rounds a requested pixel size down so `size / scale` is a whole number of logical pixels;
@@ -83,6 +104,32 @@ fn gcd(a: u32, b: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn supported_mode_matches_size_and_closest_refresh() {
+        let modes = [(2880, 1800, 60.001), (2880, 1800, 48.0), (1920, 1080, 60.0)];
+        let want = DisplayMode {
+            width: 2880,
+            height: 1800,
+            refresh_hz: 60.0,
+            scale: 2.0,
+        };
+        assert_eq!(
+            supported_mode(&modes, &want),
+            Some(DisplayMode {
+                refresh_hz: 60.001,
+                ..want.clone()
+            })
+        );
+        // A MacBook Pro panel asked for 4K by a Mac on an external monitor.
+        let uhd = DisplayMode {
+            width: 3840,
+            height: 2160,
+            ..want
+        };
+        assert_eq!(supported_mode(&modes, &uhd), None);
+        assert_eq!(supported_mode(&[], &uhd), None);
+    }
 
     #[test]
     fn fit_mode_rounds_to_scale() {
