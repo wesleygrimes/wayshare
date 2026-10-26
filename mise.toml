@@ -37,11 +37,11 @@ run = [
 description = "Run the test suite"
 run = "cargo test --locked"
 
-[tasks."check:rdp"]
-description = "Check the optional RDP adapter"
+[tasks."check:no-rdp"]
+description = "Check the build without RDP"
 run = [
-  "cargo clippy --locked --all-targets --features rdp -- -D warnings",
-  "cargo test --locked --features rdp",
+  "cargo clippy --locked --all-targets --no-default-features -- -D warnings",
+  "cargo test --locked --no-default-features",
 ]
 
 [tasks."bench:media"]
@@ -70,7 +70,7 @@ run = 'cargo build --locked ${usage_release:+--release}'
 
 [tasks.audit]
 description = "Check dependency advisories, licenses and sources (needs network)"
-run = "cargo deny --locked check"
+run = ["cargo deny --locked check", "cargo deny --locked --all-features check"]
 
 [tasks.changelog]
 description = "Preview the unreleased release notes on stdout; writes nothing"

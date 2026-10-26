@@ -6,15 +6,18 @@ license = "Apache-2.0"
 rust-version = "1.89"
 
 [features]
-rdp = ["dep:ironrdp-server", "dep:async-trait", "dep:rcgen"]
+default = ["rdp"]
+rdp = ["dep:ironrdp-server", "dep:async-trait", "dep:rcgen", "dep:zeroize", "dep:ironrdp-pdu"]
 
 [[bench]]
 name = "media"
 harness = false
 
 [dependencies]
+ironrdp-pdu = { version = "=0.9.0", default-features = false, features = ["std"], optional = true }
+zeroize = { version = "1.9", optional = true }
 async-trait = { version = "=0.1.92", optional = true }
-ironrdp-server = { version = "=0.13.0", default-features = false, optional = true }
+ironrdp-server = { version = "=0.13.0", path = "vendor/ironrdp-server", default-features = false, optional = true }
 rcgen = { version = "=0.14.10", optional = true }
 aes = "0.9.3"
 anyhow = "1.0.104"

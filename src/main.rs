@@ -33,12 +33,12 @@ struct ServeArgs {
     config: Option<PathBuf>,
     #[arg(long)]
     listen: Option<SocketAddr>,
-    /// Enable the experimental, view-only RDP listener (needs the rdp Cargo feature).
+    /// Enable the TLS RDP listener with local PAM login.
     #[arg(long, overrides_with = "no_rdp")]
     rdp: bool,
     #[arg(long)]
     no_rdp: bool,
-    /// RDP listen address. The prototype requires loopback.
+    /// RDP listen address. Defaults to loopback.
     #[arg(long)]
     rdp_listen: Option<SocketAddr>,
     /// PEM certificate and private key, generated if absent.
@@ -373,7 +373,13 @@ async fn run(s: Settings) -> Result<()> {
             Some(path) => path.clone(),
             None => wayshare::config::config_dir()?.join("rdp-identity.pem"),
         };
-        let rdp = wayshare::rdp::serve(s.rdp.listen, &identity, cfg.frame_source.clone());
+        let rdp = wayshare::rdp::serve(
+            s.rdp.listen,
+            &identity,
+            cfg.frame_source.clone(),
+            cfg.input.clone(),
+            s.rdp.allowed_user.as_deref(),
+        );
         tokio::pin!(rdp);
         let mut rdp_result = Ok(());
         rfb::serve(s.listen, Arc::new(cfg), async {

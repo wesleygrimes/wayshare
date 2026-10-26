@@ -27,11 +27,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Install system packages
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libegl-dev libgbm-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libegl-dev libgbm-dev libpam0g-dev
       - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: mise run check
-      - run: mise run check:rdp
+      - run: mise run check:no-rdp
       - run: mise run audit
 
   macos:
@@ -45,7 +45,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: mise run test
       - run: cargo clippy --locked --all-targets -- -D warnings
-      - run: mise run check:rdp
+      - run: mise run check:no-rdp
 
   msrv:
     name: msrv
@@ -55,7 +55,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install system packages
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libegl-dev libgbm-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libegl-dev libgbm-dev libpam0g-dev
       - name: Install the minimum supported Rust
         run: |
           msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
@@ -63,7 +63,7 @@ jobs:
           echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo check --locked
-      - run: cargo check --locked --features rdp
+      - run: cargo check --locked --no-default-features
 
   commits:
     name: commits

@@ -12,17 +12,17 @@ fi
 case " ${ID:-} ${ID_LIKE:-} " in
   *" arch "*)
     install="sudo pacman -S --needed"
-    packages=(base-devel mesa libglvnd)
+    packages=(base-devel mesa libglvnd pam)
     installed() { pacman -Q "$1" >/dev/null 2>&1; }
     ;;
   *" debian "* | *" ubuntu "*)
     install="sudo apt install"
-    packages=(build-essential pkg-config libegl-dev libgbm-dev)
+    packages=(build-essential pkg-config libegl-dev libgbm-dev libpam0g-dev)
     installed() { dpkg -s "$1" >/dev/null 2>&1; }
     ;;
   *" fedora "* | *" rhel "*)
     install="sudo dnf install"
-    packages=(gcc pkgconf-pkg-config libglvnd-devel mesa-libgbm-devel)
+    packages=(gcc pkgconf-pkg-config libglvnd-devel mesa-libgbm-devel pam-devel)
     installed() { rpm -q "$1" >/dev/null 2>&1; }
     ;;
   *)

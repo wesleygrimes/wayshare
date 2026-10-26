@@ -1,0 +1,4 @@
+#%PAM-1.0
+# Arch Linux policy. Other distributions must use their system authentication stack.
+auth       include      system-auth
+account    include      system-auth

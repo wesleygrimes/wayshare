@@ -57,6 +57,7 @@ pub enum KbAction {
 enum KeyId {
     Sym(u32),
     Kvk(u16),
+    Evdev(u32),
 }
 
 struct Slot {
@@ -119,6 +120,16 @@ impl KeyboardEngine {
         };
         if down {
             self.press(id, keysym)
+        } else {
+            self.release(id)
+        }
+    }
+
+    /// Physical PC keys bypass the Mac modifier mapping and keysym shift correction.
+    pub fn physical_key(&mut self, down: bool, code: u32) -> Vec<KbAction> {
+        let id = KeyId::Evdev(code);
+        if down {
+            self.press(id, 0)
         } else {
             self.release(id)
         }
@@ -207,6 +218,9 @@ impl KeyboardEngine {
         keysym: u32,
         out: &mut Vec<KbAction>,
     ) -> Option<(u32, Option<bool>)> {
+        if let KeyId::Evdev(code) = id {
+            return Some((code, None));
+        }
         if let KeyId::Kvk(k) = id {
             if let Some(m) = kvk::modifier(k) {
                 return Some((self.modifier_code(m), None));

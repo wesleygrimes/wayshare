@@ -1,4 +1,20 @@
-//! View-only RDP adapter over the shared framebuffer source.
+//! Authenticated TLS RDP adapter over the shared capture and input factories.
+
+mod input;
+#[cfg(target_os = "linux")]
+mod pam;
+#[cfg(not(target_os = "linux"))]
+mod pam {
+    pub fn service() -> &'static str {
+        "wayshare"
+    }
+    pub fn current_user() -> anyhow::Result<String> {
+        anyhow::bail!("RDP PAM login requires Linux")
+    }
+    pub fn authenticate(_: &str, _: &str, _: &str) -> anyhow::Result<bool> {
+        anyhow::bail!("RDP PAM login requires Linux")
+    }
+}
 
 use std::io::{ErrorKind, Write};
 use std::net::SocketAddr;
@@ -12,35 +28,140 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use ironrdp_server::tokio_rustls::{TlsAcceptor, rustls};
 use ironrdp_server::{
-    BitmapUpdate, DesktopSize, DisplayUpdate, PixelFormat, RdpServer, RdpServerDisplay,
-    RdpServerDisplayUpdates,
+    BitmapUpdate, CredentialDecision, CredentialValidationError, CredentialValidator, Credentials,
+    DesktopSize, DisplayUpdate, PixelFormat, RdpServer, RdpServerDisplay, RdpServerDisplayUpdates,
 };
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, warn};
+use zeroize::Zeroizing;
+
+use crate::input::InputFactory;
 
 use crate::source::{Frame, FrameSourceFactory};
 
-/// Runs until an error or cancellation. Only local viewers are allowed without auth.
-pub async fn serve(listen: SocketAddr, identity: &Path, frames: FrameSourceFactory) -> Result<()> {
-    ensure!(listen.ip().is_loopback(), "RDP requires a loopback address");
+/// Each connection owns its capture and input state, including disconnect cleanup.
+pub async fn serve(
+    listen: SocketAddr,
+    identity: &Path,
+    frames: FrameSourceFactory,
+    inputs: Option<InputFactory>,
+    allowed_user: Option<&str>,
+) -> Result<()> {
+    // The protocol library uses Rc internally, so poll connections on this local executor.
+    tokio::task::LocalSet::new()
+        .run_until(serve_local(listen, identity, frames, inputs, allowed_user))
+        .await
+}
+
+async fn serve_local(
+    listen: SocketAddr,
+    identity: &Path,
+    frames: FrameSourceFactory,
+    inputs: Option<InputFactory>,
+    allowed_user: Option<&str>,
+) -> Result<()> {
+    ensure!(cfg!(target_os = "linux"), "RDP PAM login requires Linux");
+    let user = match allowed_user {
+        Some(user) => user.to_owned(),
+        None => pam::current_user()?,
+    };
+    ensure!(
+        !user.is_empty() && !user.contains(['\0', '\\', '@']),
+        "invalid RDP account"
+    );
+    let service = pam::service();
     let tls = tls_acceptor(identity)?;
     let probe = frames.clone();
     let (width, height) =
         tokio::task::spawn_blocking(move || Ok::<_, anyhow::Error>(probe()?.size())).await??;
     ensure!(width > 0 && height > 0, "empty RDP desktop");
-    let mut server = RdpServer::builder()
-        .with_addr(listen)
-        .with_tls(tls)
-        .with_no_input()
-        .with_display_handler(Display {
-            frames,
-            size: DesktopSize { width, height },
-        })
-        .build();
-    info!(%listen, width, height, "starting view-only RDP with TLS; local viewers are not authenticated");
-    server.run().await
+    let listener = tokio::net::TcpListener::bind(listen).await?;
+    let mut sessions = tokio::task::JoinSet::new();
+    info!(%listen, %user, service, "RDP listener ready with TLS and PAM");
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, peer) = accepted?;
+                // Bound unauthenticated handshakes and slow PAM workers as well as sessions.
+                if sessions.len() >= 8 { drop(stream); continue; }
+                let authenticated = Arc::new(AtomicBool::new(false));
+                let login = Login { user: user.clone(), service, authenticated: authenticated.clone() };
+                let mut server = RdpServer::builder()
+                    .with_addr(listen)
+                    .with_tls(tls.clone())
+                    .with_input_handler(input::Input {
+                        factory: inputs.clone(), authenticated: authenticated.clone(),
+                        width, height, sink: None, buttons: 0, x: 0, y: 0, surrogate: [None; 2],
+                    })
+                    .with_display_handler(Display {
+                        frames: frames.clone(), size: DesktopSize { width, height },
+                        authenticated: authenticated.clone(),
+                    })
+                    .with_credential_validator(Some(Arc::new(login)))
+                    .build();
+                sessions.spawn_local(async move {
+                    // An idle pre-login client cannot occupy a slot indefinitely.
+                    let deadline = async {
+                        tokio::time::sleep(Duration::from_secs(30)).await;
+                        if authenticated.load(Ordering::Acquire) { std::future::pending::<()>().await; }
+                    };
+                    tokio::select! {
+                        result = server.run_connection(stream) => {
+                            if result.is_err() { info!(%peer, "RDP connection closed"); }
+                        },
+                        () = deadline => info!(%peer, "RDP login timed out"),
+                    }
+                });
+            },
+            Some(result) = sessions.join_next(), if !sessions.is_empty() => {
+                if let Err(error) = result { warn!(%error, "RDP session task failed"); }
+            },
+        }
+    }
+}
+
+struct Login {
+    user: String,
+    service: &'static str,
+    authenticated: Arc<AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl CredentialValidator for Login {
+    async fn validate(
+        &self,
+        credentials: &Credentials,
+    ) -> Result<CredentialDecision, CredentialValidationError> {
+        let started = tokio::time::Instant::now();
+        let mut accepted = false;
+        if credentials.username == self.user
+            && credentials.domain.as_deref().is_none_or(str::is_empty)
+            && !credentials.password.is_empty()
+            && credentials.password.len() <= 4096
+        {
+            let user = self.user.clone();
+            let password = Zeroizing::new(credentials.password.clone());
+            let service = self.service;
+            match tokio::task::spawn_blocking(move || pam::authenticate(service, &user, &password))
+                .await
+            {
+                Ok(Ok(valid)) => accepted = valid,
+                _ => warn!("RDP PAM backend failed"),
+            }
+        }
+        if accepted {
+            self.authenticated.store(true, Ordering::Release);
+            info!("RDP login accepted");
+            Ok(CredentialDecision::Accept)
+        } else {
+            // Sleep only this connection, including failures rejected before reaching PAM.
+            tokio::time::sleep_until(started + Duration::from_secs(2)).await;
+            info!("RDP login rejected; no frames sent");
+            Ok(CredentialDecision::Reject)
+        }
+    }
 }
 
 fn tls_acceptor(path: &Path) -> Result<TlsAcceptor> {
@@ -86,6 +207,7 @@ fn tls_acceptor(path: &Path) -> Result<TlsAcceptor> {
 struct Display {
     frames: FrameSourceFactory,
     size: DesktopSize,
+    authenticated: Arc<AtomicBool>,
 }
 
 #[async_trait::async_trait]
@@ -95,6 +217,11 @@ impl RdpServerDisplay for Display {
     }
 
     async fn updates(&mut self) -> Result<Box<dyn RdpServerDisplayUpdates>> {
+        ensure!(
+            self.authenticated.load(Ordering::Acquire),
+            "RDP login required before capture"
+        );
+        info!("RDP streaming started");
         let (sender, receiver) = mpsc::channel(1);
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
@@ -196,6 +323,40 @@ mod tests {
     use super::*;
     use crate::source::TestPattern;
 
+    #[tokio::test]
+    async fn denied_login_cannot_start_capture_and_failure_delay_is_per_connection() {
+        let authenticated = Arc::new(AtomicBool::new(false));
+        let login = Login {
+            user: "allowed".into(),
+            service: "wayshare",
+            authenticated: authenticated.clone(),
+        };
+        let credentials = Credentials {
+            username: "other".into(),
+            password: "wrong".into(),
+            domain: None,
+        };
+        let mut display = Display {
+            frames: Arc::new(|| panic!("capture before authentication")),
+            size: DesktopSize {
+                width: 64,
+                height: 64,
+            },
+            authenticated: authenticated.clone(),
+        };
+        assert!(display.updates().await.is_err());
+        let started = tokio::time::Instant::now();
+        let both =
+            async { tokio::join!(login.validate(&credentials), login.validate(&credentials)) };
+        let (first, second) = tokio::time::timeout(Duration::from_secs(4), both)
+            .await
+            .unwrap();
+        assert!(matches!(first.unwrap(), CredentialDecision::Reject));
+        assert!(matches!(second.unwrap(), CredentialDecision::Reject));
+        assert!(started.elapsed() >= Duration::from_secs(2));
+        assert!(!authenticated.load(Ordering::Acquire));
+    }
+
     #[test]
     fn bitmap_preserves_colors_and_rejects_invalid_frames() {
         let mut frame = Frame {
@@ -219,6 +380,7 @@ mod tests {
     async fn first_frame_arrives_and_disconnect_releases_capture() {
         let mut display = Display {
             frames: Arc::new(|| Ok(Box::new(TestPattern::new(64, 64)))),
+            authenticated: Arc::new(AtomicBool::new(true)),
             size: DesktopSize {
                 width: 64,
                 height: 64,

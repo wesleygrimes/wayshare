@@ -17,9 +17,10 @@ chroma = "420"                        # "444" needs encoder = "x265"
 audio = true                          # stream the default sink monitor (AAC-ELD)
 
 [rdp]
-enabled = false                       # view-only prototype; build with --features rdp
-listen = "127.0.0.1:3389"              # loopback required until authentication is added
+enabled = false                       # TLS and Linux PAM login; included in default builds
+listen = "127.0.0.1:3389"              # set a network address explicitly for remote access
 # identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
+# allowed_user = "alice"               # defaults to the account running wayshare
 
 [input]
 enabled = true

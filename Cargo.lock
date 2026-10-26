@@ -1694,8 +1694,6 @@ dependencies = [
 [[package]]
 name = "ironrdp-server"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d3922b23ad9f262b932d42fa37df87f7e45c2d12f45433c0cc084f8762fb09a"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1716,6 +1714,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -3769,6 +3768,7 @@ dependencies = [
  "gbm",
  "glow",
  "hmac",
+ "ironrdp-pdu",
  "ironrdp-server",
  "khronos-egl",
  "libc",
@@ -3795,6 +3795,7 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-misc",
  "wayland-protocols-wlr",
+ "zeroize",
 ]
 
 [[package]]

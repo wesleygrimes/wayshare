@@ -11,6 +11,10 @@ allow = [
 [advisories]
 version = 2
 unsound = "all"
+ignore = [
+  { id = "RUSTSEC-2023-0071", reason = "Connector 0.10 unconditionally links RSA through picky/sspi; only rustls ECDSA TLS and PAM are used." },
+  { id = "RUSTSEC-2023-0089", reason = "Connector 0.10 unconditionally enables sspi/scard, pulling heapless/atomic-polyfill; smart cards are unused." },
+]
 
 [sources]
 unknown-registry = "deny"

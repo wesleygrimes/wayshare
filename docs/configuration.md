@@ -106,8 +106,20 @@ enabled = true
 # device_model = "MacPro7,1"   # picks the icon Finder shows
 ```
 
-## Experimental RDP
+## RDP
 
-Build with `cargo build --locked --features rdp` to include the view-only RDP adapter.
-It is disabled by default and only accepts a loopback listen address. See
-[RDP prototype](rdp.md) for configuration, TLS identity storage and limitations.
+Default builds include RDP with TLS, local Linux password login through PAM, and input.
+The runtime listener stays disabled, with `127.0.0.1:3389` as its default address.
+
+```toml
+[rdp]
+enabled = false
+listen = "127.0.0.1:3389"
+# allowed_user = "alice"  # defaults to the account running wayshare
+# identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
+```
+
+An explicit network address is allowed. Run as the desktop owner; on Arch a non-root
+process cannot verify another user's password. See [RDP](rdp.md) for PAM packaging,
+username policy, certificate verification and limitations. `--no-default-features`
+omits RDP from the build.

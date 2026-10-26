@@ -118,11 +118,18 @@ impl PointerEngine {
                 height: self.height,
             });
         }
-        let want = match self.cfg.buttons {
-            ButtonOrder::Mac => mask & 7,
-            ButtonOrder::Rfb => (mask & 1) | (mask >> 1 & 2) | (mask << 1 & 4),
-        };
-        for (bit, code) in [(1u8, BTN_LEFT), (2, BTN_RIGHT), (4, BTN_MIDDLE)] {
+        let want = (self.buttons & !7)
+            | match self.cfg.buttons {
+                ButtonOrder::Mac => mask & 7,
+                ButtonOrder::Rfb => (mask & 1) | (mask >> 1 & 2) | (mask << 1 & 4),
+            };
+        for (bit, code) in [
+            (1u8, BTN_LEFT),
+            (2, BTN_RIGHT),
+            (4, BTN_MIDDLE),
+            (8, super::evdev::BTN_SIDE),
+            (16, super::evdev::BTN_EXTRA),
+        ] {
             if (want ^ self.buttons) & bit != 0 {
                 out.push(PtrAction::Button {
                     code,
@@ -156,6 +163,43 @@ impl PointerEngine {
             out.push(PtrAction::Frame);
         }
         out
+    }
+
+    pub fn wheel(&mut self, x: i32, y: i32) -> Vec<PtrAction> {
+        let mut actions = vec![PtrAction::AxisSource(AxisSource::Wheel)];
+        for (axis, units) in [(Axis::Horizontal, x), (Axis::Vertical, y.saturating_neg())] {
+            if units == 0 {
+                continue;
+            }
+            let value = self.sign(units) as f64 * WHEEL_STEP / 120.0;
+            if units % 120 == 0 {
+                actions.push(PtrAction::AxisDiscrete {
+                    axis,
+                    value,
+                    steps: self.sign(units / 120),
+                });
+            } else {
+                actions.push(PtrAction::Axis { axis, value });
+            }
+        }
+        if actions.len() == 1 {
+            return vec![];
+        }
+        actions.push(PtrAction::Frame);
+        actions
+    }
+
+    pub fn extra_button(&mut self, button: u8, pressed: bool) -> Vec<PtrAction> {
+        let (bit, code) = match button {
+            4 => (8, super::evdev::BTN_SIDE),
+            5 => (16, super::evdev::BTN_EXTRA),
+            _ => return vec![],
+        };
+        if (self.buttons & bit != 0) == pressed {
+            return vec![];
+        }
+        self.buttons = (self.buttons & !bit) | if pressed { bit } else { 0 };
+        vec![PtrAction::Button { code, pressed }, PtrAction::Frame]
     }
 
     /// EventMessage2 subtype 11. CG deltas are positive for up/left; Wayland's for down/right.
@@ -211,14 +255,20 @@ impl PointerEngine {
     }
 
     pub fn release_all(&mut self) -> Vec<PtrAction> {
-        let mut out: Vec<PtrAction> = [(1u8, BTN_LEFT), (2, BTN_RIGHT), (4, BTN_MIDDLE)]
-            .into_iter()
-            .filter(|(bit, _)| self.buttons & bit != 0)
-            .map(|(_, code)| PtrAction::Button {
-                code,
-                pressed: false,
-            })
-            .collect();
+        let mut out: Vec<PtrAction> = [
+            (1u8, BTN_LEFT),
+            (2, BTN_RIGHT),
+            (4, BTN_MIDDLE),
+            (8, super::evdev::BTN_SIDE),
+            (16, super::evdev::BTN_EXTRA),
+        ]
+        .into_iter()
+        .filter(|(bit, _)| self.buttons & bit != 0)
+        .map(|(_, code)| PtrAction::Button {
+            code,
+            pressed: false,
+        })
+        .collect();
         self.buttons = 0;
         if !out.is_empty() {
             out.push(PtrAction::Frame);
