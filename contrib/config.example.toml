@@ -19,6 +19,9 @@ audio = true                          # stream the default sink monitor (AAC-ELD
 [rdp]
 enabled = false                       # TLS and Linux PAM login; included in default builds
 listen = "127.0.0.1:3389"              # set a network address explicitly for remote access
+# Use "0.0.0.0:3389" for all IPv4 interfaces. Network binds require active PAM login.
+# Allow the TCP port in your firewall. Compare the logged SHA-256 colon-hex fingerprint
+# with the client's certificate details before sending your Linux password.
 # identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
 # allowed_user = "alice"               # defaults to the account running wayshare
 

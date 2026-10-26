@@ -119,7 +119,12 @@ listen = "127.0.0.1:3389"
 # identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
 ```
 
-An explicit network address is allowed. Run as the desktop owner; on Arch a non-root
-process cannot verify another user's password. See [RDP](rdp.md) for PAM packaging,
-username policy, certificate verification and limitations. `--no-default-features`
-omits RDP from the build.
+For remote access, set `enabled = true` and `listen = "0.0.0.0:3389"`, or choose one
+LAN or Tailscale address. A non-loopback listener requires active PAM authentication;
+startup fails otherwise. Run as the desktop owner; on Arch a non-root process cannot
+verify another user's password. Startup logs the bound address and certificate SHA-256
+fingerprint as colon-separated hex bytes. Compare it with the client's SHA-256
+certificate details before sending a password, and allow the TCP port in your firewall.
+See [RDP](rdp.md) for PAM packaging, username policy and limitations, including native
+monitor capture regardless of the requested client size. `--no-default-features` omits
+RDP from the build.

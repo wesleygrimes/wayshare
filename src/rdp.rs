@@ -33,6 +33,7 @@ use ironrdp_server::{
 };
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
@@ -62,24 +63,18 @@ async fn serve_local(
     inputs: Option<InputFactory>,
     allowed_user: Option<&str>,
 ) -> Result<()> {
-    ensure!(cfg!(target_os = "linux"), "RDP PAM login requires Linux");
-    let user = match allowed_user {
-        Some(user) => user.to_owned(),
-        None => pam::current_user()?,
-    };
-    ensure!(
-        !user.is_empty() && !user.contains(['\0', '\\', '@']),
-        "invalid RDP account"
-    );
-    let service = pam::service();
-    let tls = tls_acceptor(identity)?;
+    let pam_login = Arc::new(PamLogin::new(allowed_user)?);
+    let (tls, fingerprint) = tls_acceptor(identity)?;
     let probe = frames.clone();
     let (width, height) =
         tokio::task::spawn_blocking(move || Ok::<_, anyhow::Error>(probe()?.size())).await??;
     ensure!(width > 0 && height > 0, "empty RDP desktop");
-    let listener = tokio::net::TcpListener::bind(listen).await?;
+    let listener = bind_listener(listen, Some(&pam_login)).await?;
+    let bound = listener.local_addr()?;
     let mut sessions = tokio::task::JoinSet::new();
-    info!(%listen, %user, service, "RDP listener ready with TLS and PAM");
+    info!(listen = %bound, user = %pam_login.user, service = pam_login.service,
+        "RDP listener ready with TLS and PAM");
+    info!(sha256 = %fingerprint, "RDP TLS certificate fingerprint (SHA-256, colon-separated hex)");
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -87,9 +82,9 @@ async fn serve_local(
                 // Bound unauthenticated handshakes and slow PAM workers as well as sessions.
                 if sessions.len() >= 8 { drop(stream); continue; }
                 let authenticated = Arc::new(AtomicBool::new(false));
-                let login = Login { user: user.clone(), service, authenticated: authenticated.clone() };
+                let login = Login { pam: pam_login.clone(), authenticated: authenticated.clone() };
                 let mut server = RdpServer::builder()
-                    .with_addr(listen)
+                    .with_addr(bound)
                     .with_tls(tls.clone())
                     .with_input_handler(input::Input {
                         factory: inputs.clone(), authenticated: authenticated.clone(),
@@ -122,9 +117,45 @@ async fn serve_local(
     }
 }
 
-struct Login {
+struct PamLogin {
     user: String,
     service: &'static str,
+}
+
+impl PamLogin {
+    fn new(allowed_user: Option<&str>) -> Result<Self> {
+        ensure!(cfg!(target_os = "linux"), "RDP PAM login requires Linux");
+        let user = match allowed_user {
+            Some(user) => user.to_owned(),
+            None => pam::current_user()?,
+        };
+        ensure!(
+            !user.is_empty() && !user.contains(['\0', '\\', '@']),
+            "invalid RDP account"
+        );
+        Ok(Self {
+            user,
+            service: pam::service(),
+        })
+    }
+}
+
+async fn bind_listener(
+    listen: SocketAddr,
+    pam_login: Option<&PamLogin>,
+) -> Result<tokio::net::TcpListener> {
+    // Require the same PAM policy that each connection installs as its validator.
+    ensure!(
+        listen.ip().is_loopback() || pam_login.is_some(),
+        "RDP non-loopback listener {listen} requires active PAM authentication"
+    );
+    tokio::net::TcpListener::bind(listen)
+        .await
+        .with_context(|| format!("binding RDP listener {listen}"))
+}
+
+struct Login {
+    pam: Arc<PamLogin>,
     authenticated: Arc<AtomicBool>,
 }
 
@@ -136,14 +167,14 @@ impl CredentialValidator for Login {
     ) -> Result<CredentialDecision, CredentialValidationError> {
         let started = tokio::time::Instant::now();
         let mut accepted = false;
-        if credentials.username == self.user
+        if credentials.username == self.pam.user
             && credentials.domain.as_deref().is_none_or(str::is_empty)
             && !credentials.password.is_empty()
             && credentials.password.len() <= 4096
         {
-            let user = self.user.clone();
+            let user = self.pam.user.clone();
             let password = Zeroizing::new(credentials.password.clone());
-            let service = self.service;
+            let service = self.pam.service;
             match tokio::task::spawn_blocking(move || pam::authenticate(service, &user, &password))
                 .await
             {
@@ -164,7 +195,15 @@ impl CredentialValidator for Login {
     }
 }
 
-fn tls_acceptor(path: &Path) -> Result<TlsAcceptor> {
+fn certificate_fingerprint(cert: &[u8]) -> String {
+    Sha256::digest(cert)
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+fn tls_acceptor(path: &Path) -> Result<(TlsAcceptor, String)> {
     if !path.try_exists()? {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -194,6 +233,7 @@ fn tls_acceptor(path: &Path) -> Result<TlsAcceptor> {
     let pem =
         std::fs::read(path).with_context(|| format!("reading RDP identity {}", path.display()))?;
     let cert = CertificateDer::from_pem_slice(&pem).context("reading RDP certificate")?;
+    let fingerprint = certificate_fingerprint(cert.as_ref());
     let key = PrivateKeyDer::from_pem_slice(&pem).context("reading RDP private key")?;
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::aws_lc_rs::default_provider(),
@@ -201,7 +241,7 @@ fn tls_acceptor(path: &Path) -> Result<TlsAcceptor> {
     .with_safe_default_protocol_versions()?
     .with_no_client_auth()
     .with_single_cert(vec![cert], key)?;
-    Ok(TlsAcceptor::from(Arc::new(config)))
+    Ok((TlsAcceptor::from(Arc::new(config)), fingerprint))
 }
 
 struct Display {
@@ -324,11 +364,47 @@ mod tests {
     use crate::source::TestPattern;
 
     #[tokio::test]
+    async fn network_bind_requires_pam_before_opening_a_socket() {
+        for address in ["0.0.0.0:0", "[::]:0", "192.0.2.1:0", "[2001:db8::1]:0"] {
+            let error = bind_listener(address.parse().unwrap(), None)
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("requires active PAM authentication")
+            );
+        }
+        let local = bind_listener("127.0.0.1:0".parse().unwrap(), None)
+            .await
+            .unwrap();
+        assert!(local.local_addr().unwrap().ip().is_loopback());
+        #[cfg(target_os = "linux")]
+        {
+            let pam = PamLogin::new(None).unwrap();
+            let network = bind_listener("0.0.0.0:0".parse().unwrap(), Some(&pam))
+                .await
+                .unwrap();
+            assert!(network.local_addr().unwrap().ip().is_unspecified());
+        }
+    }
+
+    #[test]
+    fn fingerprint_is_sha256_in_colon_hex_form() {
+        assert_eq!(
+            certificate_fingerprint(b"abc"),
+            "BA:78:16:BF:8F:01:CF:EA:41:41:40:DE:5D:AE:22:23:B0:03:61:A3:96:17:7A:9C:B4:10:FF:61:F2:00:15:AD"
+        );
+    }
+
+    #[tokio::test]
     async fn denied_login_cannot_start_capture_and_failure_delay_is_per_connection() {
         let authenticated = Arc::new(AtomicBool::new(false));
         let login = Login {
-            user: "allowed".into(),
-            service: "wayshare",
+            pam: Arc::new(PamLogin {
+                user: "allowed".into(),
+                service: "wayshare",
+            }),
             authenticated: authenticated.clone(),
         };
         let credentials = Credentials {

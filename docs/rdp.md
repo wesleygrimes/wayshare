@@ -19,9 +19,13 @@ listen = "127.0.0.1:3389"
 settings. A build without RDP rejects an enabled listener. RFB still needs its own
 SRP verifier. Linux passwords do not replace RFB credentials.
 
-Network addresses are allowed when explicitly configured. Keep the loopback default
-and use an SSH tunnel until you have arranged server identity verification and network
-access rules. RDP has no discovery advertisement. Port 3389 is the standard RDP port.
+To accept connections from another device, set `enabled = true` and
+`listen = "0.0.0.0:3389"` for all IPv4 interfaces, or choose one LAN or Tailscale address.
+`[::]:3389` binds IPv6; IPv4 access through that socket depends on the host's socket
+policy. Startup rejects a non-loopback listener without active PAM authentication.
+There is no setting to disable PAM login. The default stays off at `127.0.0.1:3389`.
+Allow the chosen TCP port through your firewall and verify the certificate before
+sending a password. RDP has no discovery advertisement. Port 3389 is the standard port.
 
 ## Login and PAM packaging
 
@@ -71,6 +75,21 @@ PEM file, mode 0600. It reuses the identity on restart. The default path is
 replaced. For remote access, supply a certificate and PKCS#8 key with the right hostnames
 or arrange explicit fingerprint verification.
 
+At startup, wayshare logs the actual bound socket address and the TLS certificate's
+SHA-256 fingerprint. A wildcard address such as `0.0.0.0` means all IPv4 interfaces;
+enter the server's LAN or Tailscale IP in the client. The fingerprint hashes the full
+DER certificate and uses 32 uppercase hex bytes separated by colons, for example
+`BA:78:16:BF:...`. Compare it with the SHA-256 fingerprint in FreeRDP's certificate
+prompt or the Microsoft client's certificate details. Letter case and separators can
+differ; the bytes must match. A SHA-1 thumbprint is a different hash and cannot be
+compared with this value. Do not accept a certificate whose SHA-256 fingerprint differs.
+
+You can check the same value locally without exposing the private key:
+
+```sh
+openssl x509 -in /absolute/path/rdp-identity.pem -noout -fingerprint -sha256
+```
+
 ## Input and capture
 
 Keyboard scancodes map to Linux evdev codes through the shared input sink and keyboard
@@ -85,6 +104,19 @@ Each authenticated connection owns a capture thread and a bounded frame queue. C
 submits changed full frames at up to ten frames per second. A monitor size change ends
 the session. Restart wayshare after changing the monitor mode. Large desktops can be
 slow with CPU encoding.
+
+For a first client test, request 1920x1080 or lower. In Microsoft's Windows App on Mac,
+edit the PC, open Display, and select Resolution. Disable Use all monitors, Optimize
+for Retina displays and Update the session resolution on resize to enable that choice.
+On iOS or iPadOS, open Settings, then Display, and choose a resolution. On Android,
+open the profile settings, then Display, then Custom. See Microsoft's
+[display settings guide](https://learn.microsoft.com/en-us/windows-app/display-settings).
+
+The server still captures and encodes the monitor's native resolution, regardless of
+the client's requested size. A 3456x2160 desktop can be slow with CPU RemoteFX encoding.
+A smaller client window or requested resolution does not reduce that work. Some clients
+may reject a desktop larger than their requested size. Lowering server encode cost
+requires a smaller shared monitor mode and a server restart; RDP does not resize it.
 
 Clipboard, sound, monitor resizing and hardware RDP video encoding remain unsupported.
 Microsoft clients on Windows, iOS, Android and macOS need separate interoperability tests.
