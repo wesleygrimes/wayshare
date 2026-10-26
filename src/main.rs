@@ -378,6 +378,7 @@ async fn run(s: Settings) -> Result<()> {
             &identity,
             cfg.frame_source.clone(),
             cfg.input.clone(),
+            cfg.display.clone(),
             s.rdp.allowed_user.as_deref(),
         );
         tokio::pin!(rdp);

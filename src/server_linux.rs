@@ -461,10 +461,47 @@ impl HyprDisplay {
         }
     }
 
+    fn apply_mode(
+        &self,
+        session: SessionId,
+        mode: &crate::display::DisplayMode,
+    ) -> Result<Option<crate::rfb::AppliedDisplay>> {
+        use crate::display::DisplayManager;
+        let mut hypr = crate::display::hyprland::Hyprland::from_env()?;
+        let mut owner = self.owner.lock().unwrap();
+        match &*owner {
+            Some((other, _)) if *other != session => {
+                info!(
+                    owner = other,
+                    "output mode owned by another session; not resizing"
+                );
+                return Ok(None);
+            }
+            Some(_) => {}
+            None => {
+                let current = hypr
+                    .outputs()?
+                    .into_iter()
+                    .find(|o| o.name == self.output)
+                    .with_context(|| format!("output {} not found", self.output))?;
+                *owner = Some((session, current));
+            }
+        }
+        let actual = hypr.set_mode(&self.output, mode)?;
+        info!(output = %self.output, requested = ?mode, ?actual, "output mode set");
+        let px = |v: u32| v.min(u16::MAX as u32) as u16;
+        let points = |v: u32| px((v as f64 / actual.scale).round() as u32);
+        Ok(Some(crate::rfb::AppliedDisplay {
+            pixels: (px(actual.width), px(actual.height)),
+            points: (points(actual.width), points(actual.height)),
+            scale: actual.scale,
+        }))
+    }
+
     fn restore_mode(&self, session: SessionId) -> Result<()> {
         use crate::display::DisplayManager;
+        let mut owner = self.owner.lock().unwrap();
         let original = {
-            let mut owner = self.owner.lock().unwrap();
             match owner.take() {
                 Some((s, info)) if s == session => info,
                 other => {
@@ -514,45 +551,32 @@ impl crate::rfb::DisplayControl for HyprDisplay {
         session: SessionId,
         request: &crate::display::apple::DisplayRequest,
     ) -> Result<Option<crate::rfb::AppliedDisplay>> {
-        use crate::display::DisplayManager;
         if !self.resize {
             return Ok(None);
         }
         let Some(pref) = request.displays.first().and_then(|d| d.preferred()) else {
             return Ok(None);
         };
-        let mode = pref.display_mode();
-        let mut hypr = crate::display::hyprland::Hyprland::from_env()?;
-        {
-            let mut owner = self.owner.lock().unwrap();
-            match &*owner {
-                Some((other, _)) if *other != session => {
-                    info!(
-                        owner = other,
-                        "output mode owned by another session; not resizing"
-                    );
-                    return Ok(None);
-                }
-                Some(_) => {}
-                None => {
-                    let current = hypr
-                        .outputs()?
-                        .into_iter()
-                        .find(|o| o.name == self.output)
-                        .with_context(|| format!("output {} not found", self.output))?;
-                    *owner = Some((session, current));
-                }
-            }
+        self.apply_mode(session, &pref.display_mode())
+    }
+
+    fn configure_size(
+        &self,
+        session: SessionId,
+        width: u32,
+        height: u32,
+    ) -> Result<Option<crate::rfb::AppliedDisplay>> {
+        use crate::display::DisplayManager;
+        if !self.resize {
+            return Ok(None);
         }
-        let actual = hypr.set_mode(&self.output, &mode)?;
-        info!(output = %self.output, requested = ?mode, ?actual, "output mode set");
-        let px = |v: u32| v.min(u16::MAX as u32) as u16;
-        let points = |v: u32| px((v as f64 / actual.scale).round() as u32);
-        Ok(Some(crate::rfb::AppliedDisplay {
-            pixels: (px(actual.width), px(actual.height)),
-            points: (points(actual.width), points(actual.height)),
-            scale: actual.scale,
-        }))
+        let current = crate::display::hyprland::Hyprland::from_env()?
+            .outputs()?
+            .into_iter()
+            .find(|o| o.name == self.output)
+            .with_context(|| format!("output {} not found", self.output))?;
+        let mode = crate::display::fit_mode(width, height, current.refresh_hz, current.scale);
+        self.apply_mode(session, &mode)
     }
 
     fn restore(&self, session: SessionId) -> Result<()> {

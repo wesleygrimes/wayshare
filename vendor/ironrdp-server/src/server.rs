@@ -1383,18 +1383,6 @@ impl RdpServer {
             }
         }
 
-        if !result.input_events.is_empty() {
-            debug!("Handling input event backlog from acceptor sequence");
-            self.handle_input_backlog(
-                writer,
-                result.io_channel_id,
-                result.user_channel_id,
-                result.message_channel_id,
-                result.input_events,
-            )
-            .await?;
-        }
-
         self.static_channels = result.static_channels;
         if !result.reactivation {
             for (_type_id, channel, channel_id) in self.static_channels.iter_mut() {
@@ -1421,7 +1409,6 @@ impl RdpServer {
                 CapabilitySet::Bitmap(b) => {
                     if !b.desktop_resize_flag {
                         debug!("Desktop resize is not supported by the client");
-                        continue;
                     }
 
                     let client_size = DesktopSize {
@@ -1491,6 +1478,18 @@ impl RdpServer {
                 }
                 _ => {}
             }
+        }
+
+        if !result.input_events.is_empty() {
+            debug!("Handling input event backlog from acceptor sequence");
+            self.handle_input_backlog(
+                writer,
+                result.io_channel_id,
+                result.user_channel_id,
+                result.message_channel_id,
+                result.input_events,
+            )
+            .await?;
         }
 
         let desktop_size = self.display.lock().await.size().await;

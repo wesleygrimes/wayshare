@@ -70,6 +70,15 @@ pub trait DisplayControl: Send + Sync {
         session: SessionId,
         request: &crate::display::apple::DisplayRequest,
     ) -> Result<Option<AppliedDisplay>>;
+    /// Fits a pixel size at the output's current scale. Shares ownership with RFB.
+    fn configure_size(
+        &self,
+        _session: SessionId,
+        _width: u32,
+        _height: u32,
+    ) -> Result<Option<AppliedDisplay>> {
+        Ok(None)
+    }
     /// Releases this session's display changes, even if session startup failed.
     fn restore(&self, session: SessionId) -> Result<()>;
 }

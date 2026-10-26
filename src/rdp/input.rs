@@ -1,17 +1,18 @@
 //! RDP input translated into the same session sink used by RFB.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use ironrdp_server::{KeyboardEvent, MouseEvent, RdpServerInputHandler};
-use tracing::warn;
+use ironrdp_server::{DesktopSize, KeyboardEvent, MouseEvent, RdpServerInputHandler};
+use tracing::{debug, warn};
 
 use crate::input::{InputFactory, InputSink};
 
 pub(super) struct Input {
     pub factory: Option<InputFactory>,
     pub authenticated: Arc<AtomicBool>,
+    pub extent: Arc<Mutex<DesktopSize>>,
     pub width: u16,
     pub height: u16,
     pub sink: Option<Box<dyn InputSink>>,
@@ -29,7 +30,22 @@ impl Input {
         if self.sink.is_none()
             && let Some(factory) = &self.factory
         {
+            let size = *self.extent.lock().unwrap();
+            self.width = size.width;
+            self.height = size.height;
+            debug!(?size, "RDP pointer extent");
             self.sink = Some(factory(self.width.into(), self.height.into())?);
+        }
+        let size = *self.extent.lock().unwrap();
+        if let Some(sink) = &mut self.sink {
+            // Wayland normalizes pixel coordinates by this extent, including HiDPI
+            // outputs. Applying compositor scale again would shrink pointer travel.
+            if (self.width, self.height) != (size.width, size.height) {
+                debug!(?size, "RDP pointer extent changed");
+                sink.set_extent(size.width.into(), size.height.into());
+                self.width = size.width;
+                self.height = size.height;
+            }
         }
         Ok(self.sink.as_mut())
     }
@@ -103,6 +119,7 @@ impl Input {
     }
 
     fn mouse_event(&mut self, event: MouseEvent) -> Result<()> {
+        let _ = self.sink()?;
         match event {
             MouseEvent::Move { x, y } => {
                 self.x = x.into();
@@ -169,6 +186,7 @@ impl RdpServerInputHandler for Input {
         if !self.authenticated.load(Ordering::Acquire) {
             return;
         }
+        debug!(?event, extent = ?self.extent.lock().unwrap(), "RDP pointer event");
         if let Err(error) = self.mouse_event(event) {
             warn!(%error, "RDP pointer injection failed");
         }
@@ -292,6 +310,115 @@ mod tests {
         }
     }
 
+    struct PointerSink {
+        engine: PointerEngine,
+        motions: Arc<Mutex<Vec<PtrAction>>>,
+    }
+    impl InputSink for PointerSink {
+        fn key(&mut self, _: bool, _: u32, _: Option<u16>) -> Result<()> {
+            Ok(())
+        }
+        fn pointer(&mut self, x: i32, y: i32, buttons: u8) -> Result<()> {
+            self.motions
+                .lock()
+                .unwrap()
+                .extend(self.engine.pointer(x, y, buttons));
+            Ok(())
+        }
+        fn scroll(&mut self, _: &ScrollEvent) -> Result<()> {
+            Ok(())
+        }
+        fn set_extent(&mut self, width: u32, height: u32) {
+            self.engine.set_extent(width, height);
+        }
+        fn set_input_source(&mut self, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn release_all(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn pointer_uses_delivered_frame_extent_at_each_scale_and_after_rotation() {
+        for scale in [1, 2] {
+            let motions = Arc::new(Mutex::new(Vec::new()));
+            let recorded = motions.clone();
+            let extent = Arc::new(Mutex::new(DesktopSize {
+                width: 1728,
+                height: 1080,
+            }));
+            let mut input = Input {
+                factory: Some(Arc::new(move |w, h| {
+                    Ok(Box::new(PointerSink {
+                        engine: PointerEngine::new(PointerConfig::default(), w, h),
+                        motions: recorded.clone(),
+                    }))
+                })),
+                authenticated: Arc::new(AtomicBool::new(true)),
+                extent: extent.clone(),
+                // The startup probe must not define this session's coordinate space.
+                width: 3456,
+                height: 2160,
+                sink: None,
+                buttons: 0,
+                x: 0,
+                y: 0,
+                surrogate: [None; 2],
+            };
+            for (width, height) in [(1728, 1080), (1580, 836), (836, 1580)] {
+                *extent.lock().unwrap() = DesktopSize { width, height };
+                for (x, y) in [
+                    (0, 0),
+                    (width - 1, 0),
+                    (0, height - 1),
+                    (width - 1, height - 1),
+                ] {
+                    input.mouse(MouseEvent::Move { x, y });
+                    let actions = motions.lock().unwrap();
+                    let motion = actions
+                        .iter()
+                        .rev()
+                        .find(|a| matches!(a, PtrAction::Motion { .. }))
+                        .unwrap();
+                    assert_eq!(
+                        *motion,
+                        PtrAction::Motion {
+                            x: x.into(),
+                            y: y.into(),
+                            width: width.into(),
+                            height: height.into()
+                        }
+                    );
+                    // motion_absolute maps the fractions to the output's logical size.
+                    let logical = (u32::from(width) / scale, u32::from(height) / scale);
+                    assert_eq!(
+                        u32::from(x) * logical.0 / u32::from(width),
+                        u32::from(x) / scale
+                    );
+                    assert_eq!(
+                        u32::from(y) * logical.1 / u32::from(height),
+                        u32::from(y) / scale
+                    );
+                    if x == width - 1 {
+                        assert_eq!(u32::from(x) / scale, logical.0 - 1);
+                    }
+                    if y == height - 1 {
+                        assert_eq!(u32::from(y) / scale, logical.1 - 1);
+                    }
+                }
+                input.mouse(MouseEvent::RelMove {
+                    x: i32::MAX,
+                    y: i32::MAX,
+                });
+                assert_eq!(
+                    (input.x, input.y),
+                    (i32::from(width) - 1, i32::from(height) - 1)
+                );
+            }
+        }
+    }
+
     #[test]
     fn authenticated_input_maps_wire_events_and_disconnect_releases_everything() {
         let events = Arc::new(Mutex::new(vec![]));
@@ -300,6 +427,10 @@ mod tests {
         let mut input = Input {
             factory: Some(Arc::new(move |_, _| Ok(Box::new(Sink(recorder.clone()))))),
             authenticated: authenticated.clone(),
+            extent: Arc::new(Mutex::new(DesktopSize {
+                width: 800,
+                height: 600,
+            })),
             width: 800,
             height: 600,
             sink: None,

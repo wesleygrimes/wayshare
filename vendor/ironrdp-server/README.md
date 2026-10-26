@@ -11,6 +11,8 @@ Local changes:
 - Reject missing credentials on the initial connection when a validator is configured.
 - Preserve pointer coordinates and simultaneous button changes. Decode middle and side
   buttons, horizontal wheel deltas and the Pause scancode prefix.
+- Notify the display handler of the negotiated size even without client resize support,
+  and process queued input after the display extent is set.
 - Use project punctuation in imported comments.
 - Add `zeroize` and use a local package manifest without the upstream lint configuration.
 

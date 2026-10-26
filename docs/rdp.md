@@ -101,24 +101,29 @@ releases held keys and buttons. RFB and RDP share desktop focus, so concurrent i
 from viewers can interfere.
 
 Each authenticated connection owns a capture thread and a bounded frame queue. Capture
-submits changed full frames at up to ten frames per second. A monitor size change ends
-the session. Restart wayshare after changing the monitor mode. Large desktops can be
-slow with CPU encoding.
+submits changed full frames at up to ten frames per second. Frames and pointer coordinates
+use the negotiated client desktop size, including portrait sizes. The Wayland pointer
+maps that extent onto the output's logical size, so output scale needs no extra multiplier.
 
-For a first client test, request 1920x1080 or lower. In Microsoft's Windows App on Mac,
-edit the PC, open Display, and select Resolution. Disable Use all monitors, Optimize
-for Retina displays and Update the session resolution on resize to enable that choice.
-On iOS or iPadOS, open Settings, then Display, and choose a resolution. On Android,
-open the profile settings, then Display, then Custom. See Microsoft's
-[display settings guide](https://learn.microsoft.com/en-us/windows-app/display-settings).
+Enable `resize = true` to fit the shared output to the client's requested pixel size.
+RDP uses the same display owner as RFB and restores the original mode on disconnect.
+Only one session can own output mode changes. The output keeps its current scale; mode
+sizes may round down to whole logical pixels. Frames scale to the exact client size
+when the output mode differs, resizing is disabled, or another session owns the output.
 
-The server still captures and encodes the monitor's native resolution, regardless of
-the client's requested size. A 3456x2160 desktop can be slow with CPU RemoteFX encoding.
-A smaller client window or requested resolution does not reduce that work. Some clients
-may reject a desktop larger than their requested size. Lowering server encode cost
-requires a smaller shared monitor mode and a server restart; RDP does not resize it.
+Display Control supports one primary monitor at the origin. Rotation requests can use
+portrait or landscape dimensions. Width must be even, and both dimensions must be
+between 200 and 8192 pixels, per
+[MS-RDPEDISP](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpedisp/ea2de591-9203-42cd-9908-be7a55237d1c).
+Dynamic layouts must also fit the advertised area of 3840 × 2400 pixels.
+An odd initial desktop width rounds down. A size change reactivates the RDP session
+and rebuilds capture and the encoder before sending frames at the new size.
 
-Clipboard, sound, monitor resizing and hardware RDP video encoding remain unsupported.
+Start with 1920x1080 or lower to limit CPU RemoteFX encoding work. Enable dynamic
+resolution in the client to send size changes while connected. In Windows App, see
+Microsoft's [display settings guide](https://learn.microsoft.com/en-us/windows-app/display-settings).
+
+Clipboard, sound and hardware RDP video encoding remain unsupported.
 Microsoft clients on Windows, iOS, Android and macOS need separate interoperability tests.
 
 ## Dependencies

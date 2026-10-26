@@ -20,12 +20,14 @@ use std::io::{ErrorKind, Write};
 use std::net::SocketAddr;
 use std::num::{NonZeroU16, NonZeroUsize};
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use crate::rfb::{DisplayControl, SessionId};
 use anyhow::{Context, Result, ensure};
+use ironrdp_displaycontrol::pdu::DisplayControlMonitorLayout;
 use ironrdp_server::tokio_rustls::{TlsAcceptor, rustls};
 use ironrdp_server::{
     BitmapUpdate, CredentialDecision, CredentialValidationError, CredentialValidator, Credentials,
@@ -35,7 +37,7 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use zeroize::Zeroizing;
 
 use crate::input::InputFactory;
@@ -48,11 +50,19 @@ pub async fn serve(
     identity: &Path,
     frames: FrameSourceFactory,
     inputs: Option<InputFactory>,
+    display: Option<Arc<dyn DisplayControl>>,
     allowed_user: Option<&str>,
 ) -> Result<()> {
     // The protocol library uses Rc internally, so poll connections on this local executor.
     tokio::task::LocalSet::new()
-        .run_until(serve_local(listen, identity, frames, inputs, allowed_user))
+        .run_until(serve_local(
+            listen,
+            identity,
+            frames,
+            inputs,
+            display,
+            allowed_user,
+        ))
         .await
 }
 
@@ -61,6 +71,7 @@ async fn serve_local(
     identity: &Path,
     frames: FrameSourceFactory,
     inputs: Option<InputFactory>,
+    display: Option<Arc<dyn DisplayControl>>,
     allowed_user: Option<&str>,
 ) -> Result<()> {
     let pam_login = Arc::new(PamLogin::new(allowed_user)?);
@@ -75,6 +86,8 @@ async fn serve_local(
     info!(listen = %bound, user = %pam_login.user, service = pam_login.service,
         "RDP listener ready with TLS and PAM");
     info!(sha256 = %fingerprint, "RDP TLS certificate fingerprint (SHA-256, colon-separated hex)");
+    // RFB allocates low IDs; reserve the upper half for RDP display ownership.
+    let mut session: SessionId = 1 << 63;
     loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -83,19 +96,25 @@ async fn serve_local(
                 if sessions.len() >= 8 { drop(stream); continue; }
                 let authenticated = Arc::new(AtomicBool::new(false));
                 let login = Login { pam: pam_login.clone(), authenticated: authenticated.clone() };
+                let size = DesktopSize { width, height };
+                let extent = Arc::new(Mutex::new(size));
+                let target = Arc::new(Mutex::new(size));
                 let mut server = RdpServer::builder()
                     .with_addr(bound)
                     .with_tls(tls.clone())
                     .with_input_handler(input::Input {
                         factory: inputs.clone(), authenticated: authenticated.clone(),
-                        width, height, sink: None, buttons: 0, x: 0, y: 0, surrogate: [None; 2],
+                        extent: extent.clone(), width, height, sink: None, buttons: 0, x: 0, y: 0, surrogate: [None; 2],
                     })
                     .with_display_handler(Display {
                         frames: frames.clone(), size: DesktopSize { width, height },
                         authenticated: authenticated.clone(),
+                        extent, target, control: display.clone(), session, started: false,
                     })
+                    .with_honor_client_desktop_size(true)
                     .with_credential_validator(Some(Arc::new(login)))
                     .build();
+                session += 1;
                 sessions.spawn_local(async move {
                     // An idle pre-login client cannot occupy a slot indefinitely.
                     let deadline = async {
@@ -248,12 +267,118 @@ struct Display {
     frames: FrameSourceFactory,
     size: DesktopSize,
     authenticated: Arc<AtomicBool>,
+    extent: Arc<Mutex<DesktopSize>>,
+    target: Arc<Mutex<DesktopSize>>,
+    control: Option<Arc<dyn DisplayControl>>,
+    session: SessionId,
+    started: bool,
+}
+
+fn validate_size(width: u32, height: u32) -> Result<DesktopSize> {
+    // MS-RDPEDISP 2.2.2.2.1. Portrait is valid; only the width must be even.
+    ensure!(
+        (200..=8192).contains(&width) && (200..=8192).contains(&height),
+        "RDP size out of range"
+    );
+    ensure!(width.is_multiple_of(2), "RDP width must be even");
+    Ok(DesktopSize {
+        width: width as u16,
+        height: height as u16,
+    })
+}
+
+fn layout_size(layout: &DisplayControlMonitorLayout) -> Result<DesktopSize> {
+    ensure!(layout.monitors().len() == 1, "RDP supports one monitor");
+    let monitor = &layout.monitors()[0];
+    ensure!(
+        monitor.is_primary() && monitor.position() == Some((0, 0)),
+        "RDP requires a primary monitor at the origin"
+    );
+    let (width, height) = monitor.dimensions();
+    let size = validate_size(width, height)?;
+    // Match the one-monitor area advertised by DisplayControlServer 0.8.0.
+    ensure!(
+        width * height <= 3840 * 2400,
+        "RDP layout exceeds advertised monitor area"
+    );
+    Ok(size)
+}
+
+impl Display {
+    fn resize_output(&self, size: DesktopSize) {
+        if let Some(control) = &self.control {
+            match control.configure_size(self.session, size.width.into(), size.height.into()) {
+                Ok(Some(applied)) => debug!(?size, ?applied, "RDP output resized"),
+                Ok(None) => debug!(?size, "RDP output unchanged; scaling frames"),
+                Err(error) => warn!(%error, "RDP output resize failed; scaling frames"),
+            }
+        }
+    }
+}
+
+impl Drop for Display {
+    fn drop(&mut self) {
+        if self.started
+            && let Some(control) = &self.control
+            && let Err(error) = control.restore(self.session)
+        {
+            warn!(%error, "RDP display restore failed");
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl RdpServerDisplay for Display {
     async fn size(&mut self) -> DesktopSize {
         self.size
+    }
+
+    async fn request_initial_size(&mut self, client_size: DesktopSize) -> DesktopSize {
+        debug!(?client_size, "RDP client desktop size");
+        if !self.authenticated.load(Ordering::Acquire) {
+            return self.size;
+        }
+        if !self.started {
+            self.started = true;
+            // Initial Core Data permits odd widths. Normalize before the first frame;
+            // a Resize update makes the server renegotiate if this changes the size.
+            let width = u32::from(client_size.width) & !1;
+            if let Ok(size) = validate_size(width, client_size.height.into()) {
+                self.size = client_size;
+                *self.target.lock().unwrap() = size;
+                let ready = self.control.as_ref().is_none_or(|control| {
+                    control
+                        .session_started(self.session)
+                        .map_err(|error| {
+                            warn!(%error, "RDP display startup failed; scaling frames");
+                        })
+                        .is_ok()
+                });
+                if ready {
+                    self.resize_output(size);
+                }
+            }
+        } else {
+            self.size = client_size;
+        }
+        *self.extent.lock().unwrap() = self.size;
+        self.size
+    }
+
+    fn request_layout(&mut self, layout: DisplayControlMonitorLayout) {
+        debug!(?layout, "RDP Display Control layout request");
+        if !self.started || !self.authenticated.load(Ordering::Acquire) {
+            return;
+        }
+        match layout_size(&layout) {
+            Ok(size) => {
+                if *self.target.lock().unwrap() != size {
+                    self.resize_output(size);
+                    *self.target.lock().unwrap() = size;
+                }
+            }
+            Err(error) => warn!(%error, "RDP layout rejected"),
+        }
     }
 
     async fn updates(&mut self) -> Result<Box<dyn RdpServerDisplayUpdates>> {
@@ -267,10 +392,11 @@ impl RdpServerDisplay for Display {
         let worker_stop = stop.clone();
         let frames = self.frames.clone();
         let size = self.size;
+        let target = self.target.clone();
         let thread = std::thread::Builder::new()
             .name("rdp-capture".into())
             .spawn(move || {
-                let result = capture(frames, size, &sender, &worker_stop);
+                let result = capture(frames, size, &target, &sender, &worker_stop);
                 if let Err(e) = result {
                     let _ = sender.blocking_send(Err(e));
                 }
@@ -286,19 +412,36 @@ impl RdpServerDisplay for Display {
 fn capture(
     frames: FrameSourceFactory,
     size: DesktopSize,
+    target: &Mutex<DesktopSize>,
     sender: &mpsc::Sender<Result<DisplayUpdate>>,
     stop: &AtomicBool,
 ) -> Result<()> {
+    // Resize updates end this worker. Reactivation opens capture at the new mode
+    // and builds a fresh encoder before any bitmap of the new dimensions is sent.
+    let requested = *target.lock().unwrap();
+    if requested != size {
+        let _ = sender.blocking_send(Ok(DisplayUpdate::Resize(requested)));
+        return Ok(());
+    }
     let mut source = frames()?;
     let mut first = true;
     while !stop.load(Ordering::Relaxed) {
+        let requested = *target.lock().unwrap();
+        if requested != size {
+            let _ = sender.blocking_send(Ok(DisplayUpdate::Resize(requested)));
+            return Ok(());
+        }
         let changed = source.advance();
         if first || changed {
-            ensure!(
-                source.size() == (size.width, size.height),
-                "RDP desktop size changed; reconnect after restarting the server"
-            );
-            let update = bitmap(source.frame())?;
+            let frame = source.frame();
+            let fitted;
+            let frame = if (frame.width, frame.height) == (size.width, size.height) {
+                frame
+            } else {
+                fitted = fit_frame(frame, size)?;
+                &fitted
+            };
+            let update = bitmap(frame)?;
             if sender
                 .blocking_send(Ok(DisplayUpdate::Bitmap(update)))
                 .is_err()
@@ -310,6 +453,30 @@ fn capture(
         std::thread::sleep(Duration::from_millis(100));
     }
     Ok(())
+}
+
+fn fit_frame(frame: &Frame, size: DesktopSize) -> Result<Frame> {
+    ensure!(
+        frame.width > 0 && frame.height > 0 && size.width > 0 && size.height > 0,
+        "empty RDP frame"
+    );
+    ensure!(
+        frame.pixels.len() == usize::from(frame.width) * usize::from(frame.height),
+        "invalid RDP framebuffer length"
+    );
+    let mut pixels = Vec::with_capacity(usize::from(size.width) * usize::from(size.height));
+    for y in 0..u32::from(size.height) {
+        let row = y * u32::from(frame.height) / u32::from(size.height);
+        for x in 0..u32::from(size.width) {
+            let col = x * u32::from(frame.width) / u32::from(size.width);
+            pixels.push(frame.pixels[(row * u32::from(frame.width) + col) as usize]);
+        }
+    }
+    Ok(Frame {
+        width: size.width,
+        height: size.height,
+        pixels,
+    })
 }
 
 fn bitmap(frame: &Frame) -> Result<BitmapUpdate> {
@@ -362,6 +529,271 @@ impl Drop for Updates {
 mod tests {
     use super::*;
     use crate::source::TestPattern;
+
+    fn display(size: DesktopSize) -> Display {
+        Display {
+            frames: Arc::new(|| Ok(Box::new(TestPattern::new(64, 64)))),
+            size,
+            extent: Arc::new(Mutex::new(size)),
+            target: Arc::new(Mutex::new(size)),
+            authenticated: Arc::new(AtomicBool::new(true)),
+            control: None,
+            session: 1 << 63,
+            started: false,
+        }
+    }
+
+    #[test]
+    fn resize_validation_accepts_portrait_and_rejects_invalid_sizes_and_layouts() {
+        for (width, height) in [(200, 200), (8192, 8192), (836, 1580), (1580, 837)] {
+            assert!(validate_size(width, height).is_ok());
+        }
+        for (width, height) in [
+            (0, 0),
+            (199, 200),
+            (200, 199),
+            (8194, 200),
+            (200, 8193),
+            (837, 1580),
+            (u32::MAX, 200),
+        ] {
+            assert!(validate_size(width, height).is_err());
+        }
+        use ironrdp_displaycontrol::pdu::MonitorLayoutEntry;
+        let primary = MonitorLayoutEntry::new_primary(836, 1580).unwrap();
+        let secondary = MonitorLayoutEntry::new_secondary(800, 600).unwrap();
+        let layout = DisplayControlMonitorLayout::new(std::slice::from_ref(&primary)).unwrap();
+        assert_eq!(
+            layout_size(&layout).unwrap(),
+            DesktopSize {
+                width: 836,
+                height: 1580
+            }
+        );
+        assert!(
+            layout_size(&DisplayControlMonitorLayout::new(&[primary, secondary]).unwrap()).is_err()
+        );
+        assert!(
+            layout_size(
+                &DisplayControlMonitorLayout::new_single_primary_monitor(8192, 8192, None, None)
+                    .unwrap()
+            )
+            .is_err()
+        );
+        assert!(
+            layout_size(
+                &DisplayControlMonitorLayout::new_single_primary_monitor(8192, 1125, None, None)
+                    .unwrap()
+            )
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn initial_size_and_rotation_reactivate_before_new_bitmaps_and_input_extent() {
+        let mut display = display(DesktopSize {
+            width: 3456,
+            height: 2160,
+        });
+        let portrait = DesktopSize {
+            width: 836,
+            height: 1580,
+        };
+        assert_eq!(display.request_initial_size(portrait).await, portrait);
+        assert_eq!(*display.extent.lock().unwrap(), portrait);
+        let mut updates = display.updates().await.unwrap();
+        assert!(
+            matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 836 && b.height.get() == 1580)
+        );
+        display.request_layout(
+            DisplayControlMonitorLayout::new_single_primary_monitor(1580, 836, None, None).unwrap(),
+        );
+        assert_eq!(*display.extent.lock().unwrap(), portrait);
+        loop {
+            if let Some(DisplayUpdate::Resize(size)) = updates.next_update().await.unwrap() {
+                assert_eq!(
+                    size,
+                    DesktopSize {
+                        width: 1580,
+                        height: 836
+                    }
+                );
+                break;
+            }
+        }
+        drop(updates);
+        let landscape = DesktopSize {
+            width: 1580,
+            height: 836,
+        };
+        display.request_initial_size(landscape).await;
+        assert_eq!(*display.extent.lock().unwrap(), landscape);
+        let mut updates = display.updates().await.unwrap();
+        assert!(
+            matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 1580 && b.height.get() == 836)
+        );
+    }
+
+    #[derive(Default)]
+    struct DisplayOwner(Mutex<Option<SessionId>>);
+
+    impl DisplayControl for DisplayOwner {
+        fn configure(
+            &self,
+            _: SessionId,
+            _: &crate::display::apple::DisplayRequest,
+        ) -> Result<Option<crate::rfb::AppliedDisplay>> {
+            unreachable!()
+        }
+        fn configure_size(
+            &self,
+            session: SessionId,
+            width: u32,
+            height: u32,
+        ) -> Result<Option<crate::rfb::AppliedDisplay>> {
+            let mut owner = self.0.lock().unwrap();
+            if owner.is_some_and(|id| id != session) {
+                return Ok(None);
+            }
+            *owner = Some(session);
+            Ok(Some(crate::rfb::AppliedDisplay {
+                pixels: (width as u16, height as u16),
+                points: (width as u16, height as u16),
+                scale: 1.0,
+            }))
+        }
+        fn restore(&self, session: SessionId) -> Result<()> {
+            let mut owner = self.0.lock().unwrap();
+            if *owner == Some(session) {
+                *owner = None;
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn sessions_share_display_ownership_and_only_the_owner_releases_it() {
+        let owner = Arc::new(DisplayOwner::default());
+        let mut first = display(DesktopSize {
+            width: 3456,
+            height: 2160,
+        });
+        first.control = Some(owner.clone());
+        let portrait = DesktopSize {
+            width: 836,
+            height: 1580,
+        };
+        first.request_initial_size(portrait).await;
+        assert_eq!(*owner.0.lock().unwrap(), Some(first.session));
+        let mut second = display(portrait);
+        second.session += 1;
+        second.control = Some(owner.clone());
+        let landscape = DesktopSize {
+            width: 1580,
+            height: 836,
+        };
+        second.request_initial_size(landscape).await;
+        assert_eq!(*owner.0.lock().unwrap(), Some(first.session));
+        // A viewer without mode ownership still receives its negotiated frame size.
+        let mut updates = second.updates().await.unwrap();
+        assert!(
+            matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 1580 && b.height.get() == 836)
+        );
+        drop(updates);
+        drop(second);
+        assert_eq!(*owner.0.lock().unwrap(), Some(first.session));
+        drop(first);
+        assert_eq!(*owner.0.lock().unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn capture_dimension_changes_keep_frames_inside_the_negotiated_desktop() {
+        use crate::source::FrameSource;
+        struct ChangingSource(Frame, bool);
+        impl FrameSource for ChangingSource {
+            fn size(&self) -> (u16, u16) {
+                (self.0.width, self.0.height)
+            }
+            fn advance(&mut self) -> bool {
+                if self.1 {
+                    self.1 = false;
+                } else {
+                    self.0 = Frame {
+                        width: 4,
+                        height: 2,
+                        pixels: vec![7; 8],
+                    };
+                }
+                true
+            }
+            fn frame(&self) -> &Frame {
+                &self.0
+            }
+        }
+        let size = DesktopSize {
+            width: 200,
+            height: 400,
+        };
+        let mut display = display(size);
+        display.frames = Arc::new(|| {
+            Ok(Box::new(ChangingSource(
+                Frame {
+                    width: 2,
+                    height: 4,
+                    pixels: vec![1; 8],
+                },
+                true,
+            )))
+        });
+        let mut updates = display.updates().await.unwrap();
+        for color in [1, 7] {
+            assert!(
+                matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 200 && b.height.get() == 400 && b.data[0] == color)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn initial_odd_width_is_renegotiated_before_capture() {
+        let mut display = display(DesktopSize {
+            width: 3456,
+            height: 2160,
+        });
+        display.frames = Arc::new(|| panic!("capture before normalized resize"));
+        display
+            .request_initial_size(DesktopSize {
+                width: 837,
+                height: 1581,
+            })
+            .await;
+        let mut updates = display.updates().await.unwrap();
+        assert!(matches!(
+            updates.next_update().await.unwrap(),
+            Some(DisplayUpdate::Resize(DesktopSize {
+                width: 836,
+                height: 1581
+            }))
+        ));
+    }
+
+    #[test]
+    fn scaled_frame_covers_the_whole_source() {
+        let frame = Frame {
+            width: 4,
+            height: 2,
+            pixels: vec![1, 2, 3, 4, 5, 6, 7, 8],
+        };
+        let fitted = fit_frame(
+            &frame,
+            DesktopSize {
+                width: 2,
+                height: 4,
+            },
+        )
+        .unwrap();
+        assert_eq!(fitted.pixels, vec![1, 3, 1, 3, 5, 7, 5, 7]);
+        assert_eq!((fitted.width, fitted.height), (2, 4));
+    }
 
     #[tokio::test]
     async fn network_bind_requires_pam_before_opening_a_socket() {
@@ -418,6 +850,17 @@ mod tests {
                 width: 64,
                 height: 64,
             },
+            extent: Arc::new(Mutex::new(DesktopSize {
+                width: 64,
+                height: 64,
+            })),
+            target: Arc::new(Mutex::new(DesktopSize {
+                width: 64,
+                height: 64,
+            })),
+            control: None,
+            session: 1 << 63,
+            started: false,
             authenticated: authenticated.clone(),
         };
         assert!(display.updates().await.is_err());
@@ -461,6 +904,17 @@ mod tests {
                 width: 64,
                 height: 64,
             },
+            extent: Arc::new(Mutex::new(DesktopSize {
+                width: 64,
+                height: 64,
+            })),
+            target: Arc::new(Mutex::new(DesktopSize {
+                width: 64,
+                height: 64,
+            })),
+            control: None,
+            session: 1 << 63,
+            started: false,
         };
         let mut updates = display.updates().await.unwrap();
         let update = tokio::time::timeout(Duration::from_secs(5), updates.next_update())

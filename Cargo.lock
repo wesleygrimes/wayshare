@@ -3768,6 +3768,7 @@ dependencies = [
  "gbm",
  "glow",
  "hmac",
+ "ironrdp-displaycontrol",
  "ironrdp-pdu",
  "ironrdp-server",
  "khronos-egl",

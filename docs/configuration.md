@@ -15,14 +15,16 @@ After changing anything, run `wayshare restart`.
 output = "DP-1"          # the monitor to share; `hyprctl monitors` lists them
 name = "studio"          # how the machine appears on the Mac; default: the host name
 listen = "0.0.0.0:5900"  # all networks; use one address to listen only there
-resize = true            # match the Mac's window size, restore the monitor afterwards
+resize = true            # match the viewer's size, restore the monitor afterwards
 ```
 
 `wayshare setup` picks `output` and `listen` for you. To listen only over Tailscale, see
 [Security](security.md#only-accept-connections-over-tailscale).
 
-With `resize` on, wayshare switches the shared monitor to the mode the Mac asks for while
-you're connected, and puts it back when you disconnect.
+With `resize` on, wayshare switches the shared monitor to the size the RFB or RDP viewer
+requests and restores it on disconnect. One session owns mode changes at a time. RDP
+scales frames to the client size when resizing is off or another session owns the mode.
+See [RDP](rdp.md) for dynamic resolution and size limits.
 
 ## Exclusive display
 
