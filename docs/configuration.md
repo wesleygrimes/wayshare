@@ -93,8 +93,13 @@ port = 5960              # video; audio uses port + 2
 encoder = "auto"         # auto | vaapi | x265
 chroma = "420"           # "444" needs encoder = "x265"
 audio = true
+mute_local = false
 # bitrate = 40000000
 ```
+
+`mute_local = true` mutes this machine's speakers while a High Performance viewer is getting
+its audio, so sound plays only on the Mac. wayshare unmutes them when the stream stops. If
+wayshare is killed mid-session, they stay muted until you unmute them.
 
 See [High Performance mode](high-performance.md).
 

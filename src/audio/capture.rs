@@ -1,5 +1,6 @@
 //! Cancellable monitor capture through libpulse, loaded at runtime.
-//! The private mainloop never blocks; no routing or volume settings are changed.
+//! The private mainloop never blocks. Routing and volume are left alone; the only
+//! change is the opt-in mute of the monitored sink while streaming.
 
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,10 +8,12 @@ use std::time::{Duration, Instant};
 
 use super::rtp::{CHANNELS, CLOCK_RATE, SAMPLES_PER_FRAME};
 use anyhow::{Result, ensure};
+use tracing::{info, warn};
 
 pub const DEFAULT_MONITOR: &str = "@DEFAULT_MONITOR@";
 /// Lets fragsize set the source latency, as `pa_simple_new` did.
 const PA_STREAM_ADJUST_LATENCY: c_int = 0x2000;
+const PA_OPERATION_RUNNING: c_int = 0;
 
 #[repr(C)]
 struct SampleSpec {
@@ -61,6 +64,16 @@ pulse_api! {
     pa_stream_drop: unsafe extern "C" fn(Ptr) -> c_int,
     pa_stream_disconnect: unsafe extern "C" fn(Ptr) -> c_int,
     pa_stream_unref: unsafe extern "C" fn(Ptr),
+    pa_context_set_sink_mute_by_name: unsafe extern "C" fn(Ptr, *const c_char, c_int, *const c_void, Ptr) -> Ptr,
+    pa_operation_get_state: unsafe extern "C" fn(Ptr) -> c_int,
+    pa_operation_unref: unsafe extern "C" fn(Ptr),
+}
+
+/// The sink whose monitor `device` names. PulseAudio monitors are `<sink>.monitor`.
+fn sink_for_monitor(device: Option<&str>) -> &str {
+    device
+        .and_then(|d| d.strip_suffix(".monitor"))
+        .unwrap_or("@DEFAULT_SINK@")
 }
 
 pub struct MonitorCapture {
@@ -69,6 +82,8 @@ pub struct MonitorCapture {
     context: Ptr,
     stream: Ptr,
     fragment_offset: usize,
+    sink: CString,
+    sink_muted: bool,
 }
 
 impl MonitorCapture {
@@ -95,6 +110,8 @@ impl MonitorCapture {
             context: std::ptr::null_mut(),
             stream: std::ptr::null_mut(),
             fragment_offset: 0,
+            sink: CString::new(sink_for_monitor(device))?,
+            sink_muted: false,
         };
         let spec = SampleSpec {
             format: 3,
@@ -155,6 +172,46 @@ impl MonitorCapture {
             return Ok(None);
         }
         Ok(Some(cap))
+    }
+
+    /// Mutes the sink being captured so the sound plays only on the viewer. The monitor
+    /// still carries the audio. Dropping the capture unmutes it.
+    pub fn mute_sink(&mut self) -> Result<()> {
+        self.set_sink_mute(true)?;
+        self.sink_muted = true;
+        Ok(())
+    }
+
+    fn set_sink_mute(&mut self, mute: bool) -> Result<()> {
+        // SAFETY: context is ready and the sink name outlives the call. No
+        // callback is registered, so nothing retains a pointer into self.
+        let op = unsafe {
+            (self.api.pa_context_set_sink_mute_by_name)(
+                self.context,
+                self.sink.as_ptr(),
+                c_int::from(mute),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            )
+        };
+        ensure!(!op.is_null(), "pa_context_set_sink_mute_by_name failed");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let result = loop {
+            if let Err(e) = self.iterate() {
+                break Err(e);
+            }
+            // SAFETY: op is a live operation until the unref below.
+            if unsafe { (self.api.pa_operation_get_state)(op) } != PA_OPERATION_RUNNING {
+                break Ok(());
+            }
+            if Instant::now() >= deadline {
+                break Err(anyhow::anyhow!("PulseAudio mute timeout"));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        // SAFETY: releases our reference to the operation exactly once.
+        unsafe { (self.api.pa_operation_unref)(op) };
+        result
     }
 
     fn iterate(&mut self) -> Result<()> {
@@ -257,6 +314,12 @@ impl MonitorCapture {
 
 impl Drop for MonitorCapture {
     fn drop(&mut self) {
+        if self.sink_muted {
+            match self.set_sink_mute(false) {
+                Ok(()) => info!(sink = ?self.sink, "unmuted local speakers"),
+                Err(e) => warn!(sink = ?self.sink, "could not unmute local speakers: {e:#}"),
+            }
+        }
         // SAFETY: only successfully created objects are released, in dependency
         // order, on the owning thread. No callbacks or other threads use them.
         unsafe {
@@ -276,6 +339,19 @@ impl Drop for MonitorCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mutes_the_sink_behind_the_monitor() {
+        assert_eq!(sink_for_monitor(None), "@DEFAULT_SINK@");
+        assert_eq!(
+            sink_for_monitor(Some("alsa_output.pci.analog-stereo.monitor")),
+            "alsa_output.pci.analog-stereo"
+        );
+        assert_eq!(
+            sink_for_monitor(Some("@DEFAULT_MONITOR@")),
+            "@DEFAULT_SINK@"
+        );
+    }
 
     #[test]
     fn cancelled_open_needs_no_audio_server() {

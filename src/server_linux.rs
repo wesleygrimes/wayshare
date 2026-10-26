@@ -162,6 +162,7 @@ pub struct LinuxHp {
     encoder: EncoderConfig,
     fixed_bitrate: bool,
     audio: bool,
+    mute_local: bool,
     swap_keys: bool,
     media: Mutex<Option<Media>>,
 }
@@ -197,13 +198,14 @@ impl Drop for Media {
 
 impl LinuxHp {
     /// `encoder.backend = None` picks VAAPI when the GPU can, else x265. `audio` streams the
-    /// default sink's monitor as AAC-ELD.
+    /// default sink's monitor as AAC-ELD; `mute_local` mutes that sink while it streams.
     pub fn new(
         output: Option<String>,
         port: u16,
         encoder: EncoderConfig,
         fixed_bitrate: bool,
         audio: bool,
+        mute_local: bool,
         swap_keys: bool,
     ) -> Self {
         Self {
@@ -212,6 +214,7 @@ impl LinuxHp {
             encoder,
             fixed_bitrate,
             audio,
+            mute_local,
             swap_keys,
             media: Mutex::new(None),
         }
@@ -379,6 +382,7 @@ impl HpBackend for LinuxHp {
                 recv_key: a_recv,
                 encoder: crate::audio::fdk::EncoderConfig::default(),
                 device: None,
+                mute_local: self.mute_local,
             };
             match crate::audio::sender::AudioSender::start(params) {
                 Ok(sender) => {

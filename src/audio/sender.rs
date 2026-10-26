@@ -29,6 +29,8 @@ pub struct AudioParams {
     pub encoder: EncoderConfig,
     /// PulseAudio source; `None` = default sink monitor.
     pub device: Option<String>,
+    /// Mute the captured sink while streaming, so the sound plays only on the viewer.
+    pub mute_local: bool,
 }
 
 pub struct AudioSender {
@@ -176,6 +178,12 @@ fn run(p: AudioParams, sock: UdpSocket, control: &Control) -> Result<()> {
     let Some(mut cap) = MonitorCapture::open(p.device.as_deref(), stop)? else {
         return Ok(());
     };
+    if p.mute_local {
+        match cap.mute_sink() {
+            Ok(()) => info!("muted local speakers while streaming"),
+            Err(e) => warn!("could not mute local speakers: {e:#}"),
+        }
+    }
     let mut enc = AacEldEncoder::new(&p.encoder)?;
     let mut pk = AudioPacketizer::new(p.ssrc, p.payload_type, rand::random(), rand::random());
     let mut pcm = [0i16; (SAMPLES_PER_FRAME * CHANNELS) as usize];
@@ -379,6 +387,7 @@ mod tests {
             recv_key: [8; MASTER_LEN],
             encoder: EncoderConfig::default(),
             device: Some("nonexistent-test-monitor".into()),
+            mute_local: false,
         })
         .unwrap();
         sender.stop();
@@ -407,6 +416,7 @@ mod tests {
             recv_key: [8; MASTER_LEN],
             encoder: EncoderConfig::default(),
             device: None,
+            mute_local: false,
         })
         .unwrap();
         sender.activate();

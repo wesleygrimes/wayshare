@@ -313,6 +313,7 @@ async fn run(s: Settings) -> Result<()> {
                         s.video_encoder(),
                         s.hp.bitrate.is_some(),
                         s.hp.audio,
+                        s.hp.mute_local,
                         s.dev.hp_swap_keys,
                     )));
                 }
