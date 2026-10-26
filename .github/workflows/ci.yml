@@ -31,6 +31,7 @@ jobs:
       - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: mise run check
+      - run: mise run check:rdp
       - run: mise run audit
 
   macos:
@@ -44,6 +45,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: mise run test
       - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: mise run check:rdp
 
   msrv:
     name: msrv
@@ -61,6 +63,7 @@ jobs:
           echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo check --locked
+      - run: cargo check --locked --features rdp
 
   commits:
     name: commits

@@ -33,6 +33,17 @@ struct ServeArgs {
     config: Option<PathBuf>,
     #[arg(long)]
     listen: Option<SocketAddr>,
+    /// Enable the experimental, view-only RDP listener (needs the rdp Cargo feature).
+    #[arg(long, overrides_with = "no_rdp")]
+    rdp: bool,
+    #[arg(long)]
+    no_rdp: bool,
+    /// RDP listen address. The prototype requires loopback.
+    #[arg(long)]
+    rdp_listen: Option<SocketAddr>,
+    /// PEM certificate and private key, generated if absent.
+    #[arg(long)]
+    rdp_identity_file: Option<PathBuf>,
     /// SRP verifier file written by `wayshare set-password` (security type 36).
     #[arg(long)]
     srp_file: Option<PathBuf>,
@@ -94,6 +105,13 @@ impl ServeArgs {
         let flag = |on: bool, off: bool, cur: bool| if off { false } else { on || cur };
         if let Some(v) = self.listen {
             s.listen = v;
+        }
+        s.rdp.enabled = flag(self.rdp, self.no_rdp, s.rdp.enabled);
+        if let Some(v) = self.rdp_listen {
+            s.rdp.listen = v;
+        }
+        if self.rdp_identity_file.is_some() {
+            s.rdp.identity_file = self.rdp_identity_file;
         }
         if self.srp_file.is_some() {
             s.srp_file = self.srp_file;
@@ -349,6 +367,24 @@ async fn run(s: Settings) -> Result<()> {
     } else {
         None
     };
+    #[cfg(feature = "rdp")]
+    if s.rdp.enabled {
+        let identity = match &s.rdp.identity_file {
+            Some(path) => path.clone(),
+            None => wayshare::config::config_dir()?.join("rdp-identity.pem"),
+        };
+        let rdp = wayshare::rdp::serve(s.rdp.listen, &identity, cfg.frame_source.clone());
+        tokio::pin!(rdp);
+        let mut rdp_result = Ok(());
+        rfb::serve(s.listen, Arc::new(cfg), async {
+            tokio::select! {
+                () = shutdown_signal() => {},
+                result = &mut rdp => rdp_result = result,
+            }
+        })
+        .await?;
+        return rdp_result;
+    }
     rfb::serve(s.listen, Arc::new(cfg), shutdown_signal()).await
 }
 
@@ -369,6 +405,29 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rdp_flags_override_the_config() {
+        let mut settings = Settings::default();
+        settings.rdp.enabled = true;
+        let cli = Cli::try_parse_from([
+            "wayshare",
+            "--rdp",
+            "--no-rdp",
+            "--rdp-listen",
+            "127.0.0.1:13389",
+            "--rdp-identity-file",
+            "/tmp/test-rdp.pem",
+        ])
+        .unwrap();
+        cli.serve.apply(&mut settings);
+        assert!(!settings.rdp.enabled);
+        assert_eq!(settings.rdp.listen.port(), 13389);
+        assert_eq!(
+            settings.rdp.identity_file,
+            Some(PathBuf::from("/tmp/test-rdp.pem"))
+        );
+    }
 
     #[test]
     fn exclusive_flags_override_config_independently_of_resize() {

@@ -11,6 +11,8 @@ pub mod encode;
 pub mod hp;
 pub mod input;
 pub mod mdns;
+#[cfg(feature = "rdp")]
+pub mod rdp;
 pub mod rfb;
 #[cfg(target_os = "linux")]
 pub mod server_linux;

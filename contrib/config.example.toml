@@ -16,6 +16,11 @@ encoder = "auto"                      # auto | vaapi | x265
 chroma = "420"                        # "444" needs encoder = "x265"
 audio = true                          # stream the default sink monitor (AAC-ELD)
 
+[rdp]
+enabled = false                       # view-only prototype; build with --features rdp
+listen = "127.0.0.1:3389"              # loopback required until authentication is added
+# identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
+
 [input]
 enabled = true
 command_key = "super"                 # super (Omarchy binds) | ctrl | alt | altgr

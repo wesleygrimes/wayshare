@@ -14,6 +14,10 @@ use tracing::debug;
 pub use keyboard::{KeyboardConfig, ModTarget};
 pub use pointer::{ButtonOrder, PointerConfig};
 
+/// Creates the input sink for a session, given the framebuffer size.
+pub type InputFactory =
+    std::sync::Arc<dyn Fn(u32, u32) -> Result<Box<dyn InputSink>> + Send + Sync>;
+
 /// What the rfb session calls for input. Coordinates are framebuffer pixels.
 pub trait InputSink: Send {
     /// `mac_keycode` is `Some` only when the client set the use-keycode flag.

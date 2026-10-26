@@ -17,6 +17,8 @@ use anyhow::Result;
 use tokio::net::TcpListener;
 use tracing::{Instrument, info, info_span, warn};
 
+pub use crate::input::InputFactory;
+pub use crate::source::{CursorSourceFactory, FrameSourceFactory};
 pub use handshake::AuthConfig;
 
 pub struct DeviceInfo {
@@ -71,15 +73,6 @@ pub trait DisplayControl: Send + Sync {
     /// Releases this session's display changes, even if session startup failed.
     fn restore(&self, session: SessionId) -> Result<()>;
 }
-
-/// Creates the input sink for a session, given the framebuffer size.
-pub type InputFactory =
-    Arc<dyn Fn(u32, u32) -> Result<Box<dyn crate::input::InputSink>> + Send + Sync>;
-
-pub type FrameSourceFactory =
-    Arc<dyn Fn() -> Result<Box<dyn crate::source::FrameSource>> + Send + Sync>;
-
-pub type CursorSourceFactory = Arc<dyn Fn() -> Box<dyn crate::source::CursorSource> + Send + Sync>;
 
 impl Config {
     pub fn new(name: impl Into<String>, width: u16, height: u16, auth: AuthConfig) -> Self {

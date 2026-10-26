@@ -5,11 +5,17 @@ edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.89"
 
+[features]
+rdp = ["dep:ironrdp-server", "dep:async-trait", "dep:rcgen"]
+
 [[bench]]
 name = "media"
 harness = false
 
 [dependencies]
+async-trait = { version = "=0.1.92", optional = true }
+ironrdp-server = { version = "=0.13.0", default-features = false, optional = true }
+rcgen = { version = "=0.14.10", optional = true }
 aes = "0.9.3"
 anyhow = "1.0.104"
 bytes = "1.12.1"

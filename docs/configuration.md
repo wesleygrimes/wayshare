@@ -105,3 +105,9 @@ See [High Performance mode](high-performance.md).
 enabled = true
 # device_model = "MacPro7,1"   # picks the icon Finder shows
 ```
+
+## Experimental RDP
+
+Build with `cargo build --locked --features rdp` to include the view-only RDP adapter.
+It is disabled by default and only accepts a loopback listen address. See
+[RDP prototype](rdp.md) for configuration, TLS identity storage and limitations.

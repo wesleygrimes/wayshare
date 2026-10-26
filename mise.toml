@@ -37,6 +37,13 @@ run = [
 description = "Run the test suite"
 run = "cargo test --locked"
 
+[tasks."check:rdp"]
+description = "Check the optional RDP adapter"
+run = [
+  "cargo clippy --locked --all-targets --features rdp -- -D warnings",
+  "cargo test --locked --features rdp",
+]
+
 [tasks."bench:media"]
 description = "Measure HEVC packetization and SRTP encryption without a GPU"
 run = "cargo bench --locked --bench media"

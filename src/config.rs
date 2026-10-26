@@ -23,9 +23,29 @@ pub struct Settings {
     /// Disable other outputs while authenticated viewers are connected, then restore them.
     pub exclusive: bool,
     pub hp: HpSettings,
+    pub rdp: RdpSettings,
     pub input: InputSettings,
     pub mdns: MdnsSettings,
     pub dev: DevSettings,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RdpSettings {
+    pub enabled: bool,
+    pub listen: SocketAddr,
+    /// PEM certificate and private key. Defaults to the config directory.
+    pub identity_file: Option<PathBuf>,
+}
+
+impl Default for RdpSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.1:3389".parse().unwrap(),
+            identity_file: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -100,6 +120,7 @@ impl Default for Settings {
             resize: true,
             exclusive: false,
             hp: HpSettings::default(),
+            rdp: RdpSettings::default(),
             input: InputSettings::default(),
             mdns: MdnsSettings::default(),
             dev: DevSettings::default(),
@@ -197,6 +218,22 @@ impl Settings {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self.rdp.enabled {
+            if !cfg!(feature = "rdp") {
+                bail!("RDP needs a build with --features rdp");
+            }
+            if !self.rdp.listen.ip().is_loopback() {
+                bail!("the RDP prototype has no authentication; rdp.listen must be loopback");
+            }
+            if self
+                .rdp
+                .identity_file
+                .as_ref()
+                .is_some_and(|p| !p.is_absolute())
+            {
+                bail!("rdp.identity_file must be an absolute path");
+            }
+        }
         if self.exclusive && self.output.is_none() {
             bail!("exclusive mode needs an output to share");
         }
@@ -249,8 +286,22 @@ mod tests {
         assert_eq!(s, Settings::default());
         assert!(s.hp.enabled && s.input.enabled && s.resize && s.mdns.enabled);
         assert!(!s.exclusive);
+        assert!(!s.rdp.enabled);
+        assert_eq!(s.rdp.listen, "127.0.0.1:3389".parse().unwrap());
         assert_eq!(s.listen.port(), 5900);
         assert_eq!(s.keyboard().unwrap().command, ModTarget::Super);
+    }
+
+    #[test]
+    fn rdp_requires_the_feature_and_an_explicit_local_listener() {
+        let local = "[rdp]\nenabled = true\nlisten = '127.0.0.1:13389'";
+        assert_eq!(Settings::parse(local).is_ok(), cfg!(feature = "rdp"));
+        for address in ["0.0.0.0:3389", "[::]:3389", "[::ffff:192.0.2.1]:3389"] {
+            assert!(
+                Settings::parse(&format!("[rdp]\nenabled = true\nlisten = '{address}'")).is_err()
+            );
+        }
+        assert!(Settings::parse("[rdp]\nenabled = true\nidentity_file = 'relative.pem'").is_err());
     }
 
     #[test]

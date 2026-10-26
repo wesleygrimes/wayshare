@@ -42,6 +42,7 @@ missing Linux system packages but never uses sudo.
 | `mise run test` | `cargo test --locked` |
 | `mise run bench:media` | benchmark HEVC packetization and SRTP encryption; no GPU needed |
 | `mise run check` | `fmt:check`, `lint` and `test`; rewrites nothing |
+| `mise run check:rdp` | clippy and tests with the optional RDP adapter |
 | `mise run check:commits <base>` | check that commits in `<base>..HEAD` are Conventional Commits |
 | `mise run build` | dev build; add `--release` for the optimized, locked build |
 | `mise run audit` | cargo-deny: advisories, licenses, sources |

@@ -13,10 +13,12 @@ use tracing::{info, warn};
 use crate::capture::CaptureSource;
 use crate::encode::{EncoderBackend, EncoderConfig};
 use crate::hp::negotiation::{self, AnswerParams, Offer};
+use crate::rfb::SessionId;
 use crate::rfb::media::{HpBackend, MediaAnswer, MediaPorts, MediaStreamConfig, OutputResize};
 use crate::rfb::session::canonical_ip;
-use crate::rfb::{CursorSourceFactory, FrameSourceFactory, SessionId};
-use crate::source::{CursorImage, CursorSource, Frame, FrameSource};
+use crate::source::{
+    CursorImage, CursorSource, CursorSourceFactory, Frame, FrameSource, FrameSourceFactory,
+};
 
 /// Picks the encoder backend before the capturer exists. HP sessions pick again on the
 /// capturer's node if it can't run the backend.
@@ -566,7 +568,7 @@ impl crate::rfb::DisplayControl for HyprDisplay {
 pub fn input_factory(
     output: String,
     keyboard: crate::input::KeyboardConfig,
-) -> crate::rfb::InputFactory {
+) -> crate::input::InputFactory {
     Arc::new(move |w, h| {
         let sink = crate::input::wayland::WaylandInput::connect(
             Some(&output),
