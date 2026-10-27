@@ -3,6 +3,7 @@
 mod encoder;
 mod gfx;
 mod input;
+mod transport;
 use crate::config::RdpCodec;
 use std::io::{ErrorKind, Write};
 use std::net::SocketAddr;
@@ -79,6 +80,7 @@ async fn serve_local(
     let listener = bind_listener(listen, Some(&auth)).await?;
     let bound = listener.local_addr()?;
     let mut sessions = tokio::task::JoinSet::new();
+    let mut peers = transport::Peers::default();
     info!(listen = %bound, "RDP listener ready with TLS and shared Apple credentials");
     info!(sha256 = %fingerprint, "RDP TLS certificate fingerprint (SHA-256, colon-separated hex)");
     // RFB allocates low IDs; reserve the upper half for RDP display ownership.
@@ -87,8 +89,21 @@ async fn serve_local(
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, peer) = accepted?;
+                peers.reap();
+                let replacing = if let Some(old) = peers.remove(peer.ip()) {
+                    info!(%peer, "RDP same-peer connection replacing stale session");
+                    old.abort();
+                    // Drop capture and restore the old display before the new login resizes it.
+                    tokio::task::yield_now().await;
+                    true
+                } else { false };
                 // Bound unauthenticated handshakes and credential workers as well as sessions.
-                if sessions.len() >= 8 { drop(stream); continue; }
+                if !replacing && sessions.len() >= 8 { drop(stream); continue; }
+                let flow = Arc::new(transport::Output::default());
+                let socket = match transport::socket_monitor(&stream) {
+                    Ok(socket) => socket,
+                    Err(error) => { warn!(%peer, %error, "RDP socket setup failed"); continue; }
+                };
                 let authenticated = Arc::new(AtomicBool::new(false));
                 let login = Login { auth: auth.clone(), authenticated: authenticated.clone() };
                 let size = DesktopSize { width, height };
@@ -112,15 +127,17 @@ async fn serve_local(
                         frames: frames.clone(), size: DesktopSize { width, height },
                         authenticated: authenticated.clone(),
                         extent, target, control: display.clone(), session, started: false, gfx,
-                        applied: None, client_size: size, legacy_codec: "bitmap",
+                        applied: None, client_size: size, legacy_codec: "bitmap", flow: flow.clone(),
                     })
+                    .with_display_suppressed_handle(flow.suppressed.clone())
                     .with_gfx_factory(gfx_factory)
                     .with_honor_client_desktop_size(true)
                     .with_credential_validator(Some(Arc::new(login)))
                     .build();
                 let span = tracing::info_span!("rdp", %peer, session);
                 session += 1;
-                sessions.spawn_local(async move {
+                let peer_socket = Arc::downgrade(&socket);
+                let task = sessions.spawn_local(async move {
                     // An idle pre-login client cannot occupy a slot indefinitely.
                     let deadline = async {
                         tokio::time::sleep(Duration::from_secs(30)).await;
@@ -131,11 +148,17 @@ async fn serve_local(
                             if result.is_err() { info!(%peer, "RDP connection closed"); }
                         },
                         () = deadline => info!(%peer, "RDP login timed out"),
+                        result = transport::watch(socket, &flow) => {
+                            if let Err(error) = result { warn!(%peer, %error, "RDP socket monitor failed"); }
+                        },
                     }
                 }.instrument(span));
+                peers.insert(peer.ip(), task, peer_socket);
             },
             Some(result) = sessions.join_next(), if !sessions.is_empty() => {
-                if let Err(error) = result { warn!(%error, "RDP session task failed"); }
+                if let Err(error) = result && !error.is_cancelled() {
+                    warn!(%error, "RDP session task failed");
+                }
             },
         }
     }
@@ -253,6 +276,7 @@ struct Display {
     applied: Option<AppliedDisplay>,
     client_size: DesktopSize,
     legacy_codec: &'static str,
+    flow: Arc<transport::Output>,
 }
 
 // A session may resize repeatedly, but a broken confirmation must not spin forever.
@@ -419,6 +443,10 @@ impl RdpServerDisplay for Display {
         self.legacy_codec = codec;
     }
 
+    fn request_refresh(&mut self) {
+        self.flow.refresh.store(true, Ordering::Release);
+    }
+
     async fn updates(&mut self) -> Result<Box<dyn RdpServerDisplayUpdates>> {
         ensure!(
             self.authenticated.load(Ordering::Acquire),
@@ -436,6 +464,7 @@ impl RdpServerDisplay for Display {
             client: self.client_size,
             applied: self.applied,
             legacy_codec: self.legacy_codec,
+            flow: self.flow.clone(),
         };
         let span = tracing::Span::current();
         let thread = std::thread::Builder::new()
@@ -448,6 +477,7 @@ impl RdpServerDisplay for Display {
                 }
             })?;
         Ok(Box::new(Updates {
+            flow: self.flow.clone(),
             receiver,
             stop,
             thread: Some(thread),
@@ -460,6 +490,7 @@ struct CaptureContext {
     client: DesktopSize,
     applied: Option<AppliedDisplay>,
     legacy_codec: &'static str,
+    flow: Arc<transport::Output>,
 }
 
 fn capture(
@@ -524,6 +555,16 @@ fn capture(
                 _ => (),
             }
         }
+        dirty |= summary.flow.refresh.load(Ordering::Acquire);
+        if !summary.flow.can_capture() {
+            std::thread::sleep(Duration::from_millis(20));
+            continue;
+        }
+        let refresh = summary.flow.refresh.swap(false, Ordering::AcqRel);
+        dirty |= refresh;
+        if refresh {
+            summary.flow.invalidate.store(true, Ordering::Release);
+        }
         if first || dirty || stream.as_ref().is_some_and(gfx::Stream::needs_frame) {
             let frame = source.frame();
             let fitted;
@@ -547,6 +588,9 @@ fn capture(
                     codec, reason, "RDP session summary");
             }
             let update = if let Some(active) = &mut stream {
+                if refresh {
+                    active.request_refresh();
+                }
                 match active.frame(frame) {
                     Ok(Some(messages)) => DisplayUpdate::Egfx(messages),
                     Ok(None) => {
@@ -571,6 +615,7 @@ fn capture(
             } else {
                 DisplayUpdate::Bitmap(bitmap(frame)?)
             };
+            summary.flow.in_flight.store(true, Ordering::Release);
             if sender.blocking_send(Ok(update)).is_err() {
                 break;
             }
@@ -631,6 +676,7 @@ fn bitmap(frame: &Frame) -> Result<BitmapUpdate> {
 }
 
 struct Updates {
+    flow: Arc<transport::Output>,
     receiver: mpsc::Receiver<Result<DisplayUpdate>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -638,6 +684,14 @@ struct Updates {
 
 #[async_trait::async_trait]
 impl RdpServerDisplayUpdates for Updates {
+    fn update_sent(&mut self) {
+        self.flow.in_flight.store(false, Ordering::Release);
+    }
+
+    fn take_refresh(&mut self) -> bool {
+        self.flow.invalidate.swap(false, Ordering::AcqRel)
+    }
+
     async fn next_update(&mut self) -> Result<Option<DisplayUpdate>> {
         // recv is cancellation safe; capture never runs inside the selected future.
         self.receiver.recv().await.transpose()
@@ -647,6 +701,7 @@ impl RdpServerDisplayUpdates for Updates {
 impl Drop for Updates {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.flow.in_flight.store(false, Ordering::Release);
         self.receiver.close();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -658,6 +713,13 @@ impl Drop for Updates {
 mod tests {
     use super::*;
     use crate::source::TestPattern;
+
+    async fn completed_update(
+        updates: &mut Box<dyn RdpServerDisplayUpdates>,
+    ) -> Result<Option<DisplayUpdate>> {
+        updates.update_sent();
+        updates.next_update().await
+    }
 
     fn display(size: DesktopSize) -> Display {
         Display {
@@ -673,6 +735,7 @@ mod tests {
             applied: None,
             client_size: size,
             legacy_codec: "bitmap",
+            flow: Arc::default(),
         }
     }
 
@@ -754,14 +817,15 @@ mod tests {
         assert_eq!(*display.extent.lock().unwrap(), portrait);
         let mut updates = display.updates().await.unwrap();
         assert!(
-            matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 836 && b.height.get() == 1580)
+            matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 836 && b.height.get() == 1580)
         );
         display.request_layout(
             DisplayControlMonitorLayout::new_single_primary_monitor(1580, 836, None, None).unwrap(),
         );
         assert_eq!(*display.extent.lock().unwrap(), portrait);
         loop {
-            if let Some(DisplayUpdate::Resize(size)) = updates.next_update().await.unwrap() {
+            if let Some(DisplayUpdate::Resize(size)) = completed_update(&mut updates).await.unwrap()
+            {
                 assert_eq!(
                     size,
                     DesktopSize {
@@ -781,7 +845,7 @@ mod tests {
         assert_eq!(*display.extent.lock().unwrap(), landscape);
         let mut updates = display.updates().await.unwrap();
         assert!(
-            matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 1580 && b.height.get() == 836)
+            matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 1580 && b.height.get() == 836)
         );
     }
 
@@ -870,7 +934,7 @@ mod tests {
             assert_eq!(display.request_initial_size(requested).await, requested);
             let mut updates = display.updates().await.unwrap();
             assert!(
-                matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b))
+                matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Bitmap(b))
                 if (b.width.get(), b.height.get()) == (width, height))
             );
             drop(updates);
@@ -890,7 +954,7 @@ mod tests {
             );
             let mut updates = display.updates().await.unwrap();
             assert!(
-                matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Resize(s)) if s == next)
+                matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Resize(s)) if s == next)
             );
             drop(updates);
             // The iPhone repeats its original Bitmap capabilities on Confirm Active.
@@ -898,7 +962,7 @@ mod tests {
             assert_eq!(*display.extent.lock().unwrap(), next);
             let mut updates = display.updates().await.unwrap();
             assert!(
-                matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b))
+                matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Bitmap(b))
                 if (b.width.get(), b.height.get()) == (next.width, next.height))
             );
             assert_eq!(display.target.lock().unwrap().reactivations, 1);
@@ -939,7 +1003,7 @@ mod tests {
             display.target.lock().unwrap().target = requested;
             let mut updates = display.updates().await.unwrap();
             assert!(
-                matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Resize(s)) if s == requested)
+                matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Resize(s)) if s == requested)
             );
             drop(updates);
             display.started = true;
@@ -951,7 +1015,7 @@ mod tests {
         };
         let mut updates = display.updates().await.unwrap();
         assert!(
-            matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b))
+            matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Bitmap(b))
             if (b.width.get(), b.height.get()) == (current.width, current.height))
         );
         let mut state = display.target.lock().unwrap();
@@ -986,7 +1050,7 @@ mod tests {
         // A viewer without mode ownership still receives its negotiated frame size.
         let mut updates = second.updates().await.unwrap();
         assert!(
-            matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 1580 && b.height.get() == 836)
+            matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 1580 && b.height.get() == 836)
         );
         drop(updates);
         drop(second);
@@ -1037,9 +1101,82 @@ mod tests {
         let mut updates = display.updates().await.unwrap();
         for color in [1, 7] {
             assert!(
-                matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 200 && b.height.get() == 400 && b.data[0] == color)
+                matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Bitmap(b)) if b.width.get() == 200 && b.height.get() == 400 && b.data[0] == color)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn pending_output_keeps_only_the_latest_capture_and_resume_redraws() {
+        use crate::source::FrameSource;
+        use std::sync::atomic::AtomicU32;
+        struct Source {
+            color: Arc<AtomicU32>,
+            frame: Frame,
+        }
+        impl FrameSource for Source {
+            fn size(&self) -> (u16, u16) {
+                (200, 200)
+            }
+            fn advance(&mut self) -> bool {
+                let color = self.color.load(Ordering::Acquire);
+                let dirty = self.frame.pixels[0] != color;
+                self.frame.pixels.fill(color);
+                dirty
+            }
+            fn frame(&self) -> &Frame {
+                &self.frame
+            }
+        }
+        let color = Arc::new(AtomicU32::new(1));
+        let c = color.clone();
+        let mut display = display(DesktopSize {
+            width: 200,
+            height: 200,
+        });
+        display.frames = Arc::new(move || {
+            Ok(Box::new(Source {
+                color: c.clone(),
+                frame: Frame {
+                    width: 200,
+                    height: 200,
+                    pixels: vec![1; 40000],
+                },
+            }))
+        });
+        let mut updates = display.updates().await.unwrap();
+        assert!(matches!(
+            updates.next_update().await.unwrap(),
+            Some(DisplayUpdate::Bitmap(_))
+        ));
+        color.store(2, Ordering::Release);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(160), updates.next_update())
+                .await
+                .is_err()
+        );
+        color.store(7, Ordering::Release);
+        updates.update_sent();
+        let update = tokio::time::timeout(Duration::from_secs(2), updates.next_update())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(update, Some(DisplayUpdate::Bitmap(b)) if b.data[0] == 7));
+        display.flow.suppressed.store(true, Ordering::Release);
+        updates.update_sent();
+        display.request_refresh();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(160), updates.next_update())
+                .await
+                .is_err()
+        );
+        display.flow.suppressed.store(false, Ordering::Release);
+        let update = tokio::time::timeout(Duration::from_secs(2), updates.next_update())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(update, Some(DisplayUpdate::Bitmap(b)) if b.data[0] == 7));
+        assert!(updates.take_refresh());
     }
 
     #[test]
@@ -1174,6 +1311,7 @@ mod tests {
                 height: 64,
             },
             legacy_codec: "bitmap",
+            flow: Arc::default(),
             authenticated: authenticated.clone(),
         };
         assert!(display.updates().await.is_err());
@@ -1235,6 +1373,7 @@ mod tests {
                 height: 64,
             },
             legacy_codec: "bitmap",
+            flow: Arc::default(),
         };
         let mut updates = display.updates().await.unwrap();
         let update = tokio::time::timeout(Duration::from_secs(5), updates.next_update())

@@ -387,6 +387,10 @@ impl Stream {
         })
     }
 
+    pub fn request_refresh(&mut self) {
+        self.first = true;
+    }
+
     pub fn frame(&mut self, frame: &Frame) -> Result<Option<Vec<Vec<u8>>>> {
         let pace = self
             .connection

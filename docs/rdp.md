@@ -184,8 +184,16 @@ After 32 server reactivations, the session keeps its current extent and logs a w
 Start with 1920x1080 or lower to limit CPU RemoteFX encoding work. The client must send
 a Display Control layout or reconnect with a new desktop size to change the resolution.
 Rotating a device can instead scale or crop the existing framebuffer locally.
+In a live rotation test, the iOS Windows App stopped reading its connection.
+No Display Control layout or disconnect appeared in the server log. The server closes a connection
+after five seconds without output progress so the app can reconnect at its new size.
+A new connection from the same IP replaces the old session. Suppress Output pauses
+graphics; resuming or requesting Refresh Rect redraws the current desktop.
+Legacy capture skips intermediate frames while the previous update or socket backlog
+is pending. Debug logs include `RDP client PDU`, `RDP client stalled; closing connection`
+and the new `RDP session summary` with the requested dimensions.
 With `RUST_LOG=info,wayshare::rdp=debug`, the server logs client capabilities, static and
-dynamic channel states, completed Display Control caps writes, layout requests and
+dynamic channel states, queued Display Control caps, layout requests and
 pointer extents. The caps allow one monitor with a maximum area of 8192 times 8192
 pixels. Each dimension also has an 8192-pixel limit.
 

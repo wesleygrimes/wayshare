@@ -14,11 +14,14 @@ Local changes:
 - Notify the display handler of the negotiated size even without client resize support,
   and process queued input after the display extent is set.
 - Log negotiated static channels, client capabilities and channel responses under the
-  application RDP debug target. Log Display Control caps only after the write succeeds.
+  application RDP debug target. Log when Display Control caps enter the output queue.
 - Carry EGFX DVC output through the bounded display queue so frames, resets and legacy
   fallback remain ordered across reactivation. Log the available legacy codec at info.
 - Advertise one Display Control monitor with an area limit of 8192 by 8192,
   and log every received Display Control PDU before decoding it.
+- Queue bounded control replies separately from graphics completion so reads continue
+  during a pending write. Close stalled writes after five seconds.
+- Honor Suppress Output, request full refreshes, and log client PDU types without payloads.
 - Report the selected legacy codec to the display handler for session summaries.
 - Pad compressed bitmap scanlines to four pixels without enlarging their destination.
   Count cropped rows by their declared height, including the final partial stride.

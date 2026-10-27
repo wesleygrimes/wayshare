@@ -1035,6 +1035,7 @@ impl RdpServer {
     ) -> Result<RunState> {
         match action {
             Action::FastPath => {
+                debug!(target: "wayshare::rdp", pdu = "FastPathInput", "RDP client PDU");
                 let input = decode(&bytes)?;
                 self.handle_fastpath(input).await;
             }
@@ -1269,9 +1270,25 @@ impl RdpServer {
         let mut display_updates = self.display.lock().await.updates().await?;
         #[cfg(feature = "egfx")]
         let drdynvc_channel_id = self.get_channel_id_by_type::<dvc::DrdynvcServer>();
-        let mut writer = SharedWriter::new(writer);
-        let mut display_writer = writer.clone();
-        let mut event_writer = writer.clone();
+        let (tx, mut rx) = mpsc::channel::<QueuedWrite>(16);
+        let mut display_writer = QueuedWriter { tx: tx.clone(), wait: true, suppressed: Some(self.display_suppressed.clone()) };
+        let mut event_writer = QueuedWriter { tx: tx.clone(), wait: false, suppressed: None };
+        let mut control_writer = QueuedWriter { tx, wait: false, suppressed: None };
+        let write_output = async move {
+            while let Some(write) = rx.recv().await {
+                // Cancellation ends the connection. Never restart a partial PDU.
+                match tokio::time::timeout(Duration::from_secs(5), writer.write_all(&write.bytes)).await {
+                    Ok(result) => result?,
+                    Err(_) => {
+                        tracing::info!(outstanding_bytes = write.bytes.len(), stall_time = ?Duration::from_secs(5), "RDP client stalled; closing connection");
+                        return Ok(RunState::Disconnect);
+                    }
+                }
+                if let Some(done) = write.done { let _ = done.send(()); }
+            }
+            Ok(RunState::Disconnect)
+        };
+        let suppressed = self.display_suppressed.clone();
         let ev_receiver = Arc::clone(&self.ev_receiver);
         let s = Rc::new(Mutex::new(self));
 
@@ -1284,7 +1301,7 @@ impl RdpServer {
                     .dispatch_pdu(
                         action,
                         bytes,
-                        &mut writer,
+                        &mut control_writer,
                         io_channel_id,
                         user_channel_id,
                         message_channel_id,
@@ -1303,6 +1320,13 @@ impl RdpServer {
             loop {
                 match display_updates.next_update().await {
                     Ok(Some(update)) => {
+                        // A bitmap not started on the wire can be discarded on suppress.
+                        // Encoded EGFX has stateful reset/frame ordering and stays serialized.
+                        if suppressed.load(Ordering::Relaxed) && matches!(update, DisplayUpdate::Bitmap(_)) {
+                            display_updates.update_sent();
+                            continue;
+                        }
+                        if display_updates.take_refresh() { encoder.invalidate(); }
                         match Self::dispatch_display_update(
                             update,
                             &mut display_writer,
@@ -1317,6 +1341,7 @@ impl RdpServer {
                         {
                             (RunState::Continue, enc) => {
                                 encoder = enc;
+                                display_updates.update_sent();
                                 continue;
                             }
                             (state, _) => {
@@ -1359,6 +1384,7 @@ impl RdpServer {
         };
 
         let state = tokio::select!(
+            state = write_output => state,
             state = dispatch_pdu => state,
             state = dispatch_display => state,
             state = dispatch_events => state,
@@ -1612,6 +1638,11 @@ impl RdpServer {
     async fn handle_io_channel_data(&mut self, data: SendDataRequest<'_>) -> Result<bool> {
         let control: rdp::headers::ShareControlHeader = decode(data.user_data.as_ref())?;
 
+        if let ShareControlPdu::Data(ref header) = control.share_control_pdu {
+            debug!(target: "wayshare::rdp", pdu = header.share_data_pdu.as_short_name(), "RDP client PDU");
+        } else {
+            debug!(target: "wayshare::rdp", pdu = "ShareControl", "RDP client PDU");
+        }
         match control.share_control_pdu {
             ShareControlPdu::Data(header) => match header.share_data_pdu {
                 rdp::headers::ShareDataPdu::Input(pdu) => {
@@ -1622,42 +1653,24 @@ impl RdpServer {
                     return Ok(true);
                 }
 
-                // Client requests the server stop or resume sending display
-                // updates. mstsc sends `desktop_rect: None` on minimize and
-                // `desktop_rect: Some(rect)` on refocus. Without honoring
-                // this, the server keeps streaming high-bitrate EGFX/H.264
-                // frames into a minimized client; on refocus the client
-                // must chew through the accumulated backlog before it can
-                // present the current frame, locking up its input dispatch
-                // for seconds. Flagging the shared `display_suppressed`
-                // lets the display backend skip frame emission while it's
-                // set.
                 rdp::headers::ShareDataPdu::SuppressOutput(pdu) => {
                     let suppress = pdu.desktop_rect.is_none();
-                    self.display_suppressed.store(suppress, Ordering::Relaxed);
-                    debug!(suppress, "client suppress-output state changed");
+                    self.display_suppressed.store(suppress, Ordering::Release);
+                    debug!(target: "wayshare::rdp", suppress, "RDP suppress-output state changed");
+                    if !suppress { self.display.lock().await.request_refresh(); }
                 }
-
-                // Client asks the server to redraw a rectangle, typical on
-                // refocus after a minimize. Clear the suppress flag so the
-                // backend resumes emission and treat this as "client wants
-                // updates again." (The flag would also be cleared by the
-                // `SuppressOutput { Some(rect) }` that usually accompanies
-                // this; clearing here is belt-and-braces against clients
-                // that send only one of the two.)
                 rdp::headers::ShareDataPdu::RefreshRectangle(_) => {
-                    if self.display_suppressed.swap(false, Ordering::Relaxed) {
-                        debug!("client RefreshRectangle cleared suppress-output state");
-                    }
+                    // Refresh requests do not revoke an explicit Suppress Output.
+                    self.display.lock().await.request_refresh();
                 }
 
                 unexpected => {
-                    warn!(?unexpected, "Unexpected share data pdu");
+                    warn!(pdu = unexpected.as_short_name(), "Unexpected share data pdu");
                 }
             },
 
             unexpected => {
-                warn!(?unexpected, "Unexpected share control");
+                warn!(pdu = ironrdp_core::name(&unexpected), "Unexpected share control");
             }
         }
 
@@ -1707,34 +1720,43 @@ impl RdpServer {
                 }
 
                 if message_channel_id == Some(data.channel_id) {
+                    debug!(target: "wayshare::rdp", pdu = "AutoDetectResponse", "RDP client PDU");
                     self.handle_message_channel_data(data);
                     return Ok(false);
                 }
 
                 if let Some(svc) = self.static_channels.get_by_channel_id_mut(data.channel_id) {
+                    // SVC has an eight-byte header. Log only the DVC command nibble,
+                    // never channel payloads (clipboard and input can contain secrets).
+                    let command = (svc.channel_processor_downcast_ref::<dvc::DrdynvcServer>().is_some()
+                        && data.user_data.get(4).is_some_and(|flags| flags & 1 != 0))
+                        .then(|| data.user_data.get(8).map(|b| match b >> 4 {
+                            1 => "Create", 2 => "DataFirst", 3 => "Data", 4 => "Close", 5 => "Capabilities", _ => "Other",
+                        })).flatten();
+                    debug!(target: "wayshare::rdp", pdu = "StaticChannel", channel_id = data.channel_id, dvc_command = command, "RDP client PDU");
                     let was_opened = display_control_opened(svc);
                     let response_pdus = svc.process(&data.user_data)?;
                     let caps_generated = !was_opened && display_control_opened(svc) && !response_pdus.is_empty();
                     let response = server_encode_svc_messages(response_pdus, data.channel_id, user_channel_id)?;
                     writer.write_all(&response).await?;
                     // DisplayControlServer::start generates caps on the successful DVC create response.
-                    // Log after writing, so an open channel alone is not mistaken for sent caps.
+                    // Control replies are queued so reads can continue during a graphics write.
                     if caps_generated {
-                        debug!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), caps = ?crate::display_control::capabilities(), "RDP Display Control caps sent");
+                        debug!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), caps = ?crate::display_control::capabilities(), "RDP Display Control caps queued");
                     }
-                    debug!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), ?svc, "RDP static channel processed");
+                    debug!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), display_control_open = display_control_opened(svc), "RDP static channel processed");
                 } else {
                     warn!(channel_id = data.channel_id, "Unexpected channel received: ID",);
                 }
             }
 
             mcs::McsMessage::DisconnectProviderUltimatum(disconnect) => {
-                if disconnect.reason == mcs::DisconnectReason::UserRequested {
-                    return Ok(true);
-                }
+                debug!(target: "wayshare::rdp", pdu = "DisconnectProviderUltimatum", reason = ?disconnect.reason, "RDP client PDU");
+                return Ok(true);
             }
 
             _ => {
+                debug!(target: "wayshare::rdp", pdu = ironrdp_core::name(&message), "RDP client PDU");
                 warn!(name = ironrdp_core::name(&message), "Unexpected mcs message");
             }
         }
@@ -1812,7 +1834,7 @@ impl RdpServer {
     }
 
     pub fn set_credentials(&mut self, creds: Option<Credentials>) {
-        debug!(?creds, "Changing credentials");
+        debug!("Changing credentials");
         self.creds = creds
     }
 }
@@ -1893,41 +1915,99 @@ async fn send_access_denied(
     Ok(())
 }
 
-struct SharedWriter<'w, W: FramedWrite> {
-    writer: Rc<Mutex<&'w mut W>>,
+// One writer preserves TLS/PDU ordering. Control handlers enqueue bounded replies
+// without waiting for graphics, so they can keep reading suppression and disconnects.
+struct QueuedWrite {
+    bytes: Vec<u8>,
+    done: Option<oneshot::Sender<()>>,
 }
 
-impl<W: FramedWrite> Clone for SharedWriter<'_, W> {
-    fn clone(&self) -> Self {
-        Self {
-            writer: Rc::clone(&self.writer),
-        }
-    }
+struct QueuedWriter {
+    tx: mpsc::Sender<QueuedWrite>,
+    wait: bool,
+    suppressed: Option<Arc<AtomicBool>>,
 }
 
-impl<W> FramedWrite for SharedWriter<'_, W>
-where
-    W: FramedWrite,
-{
-    type WriteAllFut<'write>
-        = core::pin::Pin<Box<dyn Future<Output = std::io::Result<()>> + 'write>>
-    where
-        Self: 'write;
+impl FramedWrite for QueuedWriter {
+    type WriteAllFut<'a> = core::pin::Pin<Box<dyn Future<Output = std::io::Result<()>> + 'a>>;
 
     fn write_all<'a>(&'a mut self, buf: &'a [u8]) -> Self::WriteAllFut<'a> {
-        Box::pin(async {
-            let mut writer = self.writer.lock().await;
-
-            writer.write_all(buf).await?;
+        Box::pin(async move {
+            if buf.is_empty() { return Ok(()); }
+            while self.suppressed.as_ref().is_some_and(|s| s.load(Ordering::Acquire)) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            let (tx, rx) = oneshot::channel();
+            let write = QueuedWrite { bytes: buf.to_vec(), done: self.wait.then_some(tx) };
+            self.tx.try_send(write).map_err(|_| std::io::Error::other("RDP output queue full or closed"))?;
+            if self.wait {
+                rx.await.map_err(|_| std::io::Error::other("RDP writer closed"))?;
+            }
             Ok(())
         })
     }
 }
 
-impl<'a, W: FramedWrite> SharedWriter<'a, W> {
-    fn new(writer: &'a mut W) -> Self {
-        Self {
-            writer: Rc::new(Mutex::new(writer)),
-        }
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use crate::display::RdpServerDisplayUpdates;
+    use ironrdp_pdu::geometry::InclusiveRectangle;
+    use ironrdp_pdu::rdp::headers::{ShareDataHeader, ShareDataPdu, StreamPriority, CompressionFlags};
+
+    struct Display(Arc<AtomicUsize>);
+    #[async_trait::async_trait]
+    impl RdpServerDisplay for Display {
+        async fn size(&mut self) -> DesktopSize { DesktopSize { width: 836, height: 1580 } }
+        async fn updates(&mut self) -> Result<Box<dyn RdpServerDisplayUpdates>> { unreachable!() }
+        fn request_refresh(&mut self) { self.0.fetch_add(1, Ordering::Relaxed); }
+    }
+
+    async fn deliver(server: &mut RdpServer, pdu: ShareDataPdu) -> bool {
+        let bytes = encode_vec(&rdp::headers::ShareControlHeader {
+            share_id: 0, pdu_source: 1003,
+            share_control_pdu: ShareControlPdu::Data(ShareDataHeader {
+                share_data_pdu: pdu, stream_priority: StreamPriority::Undefined,
+                compression_flags: CompressionFlags::empty(),
+                compression_type: rdp::client_info::CompressionType::K8,
+            }),
+        }).unwrap();
+        server.handle_io_channel_data(SendDataRequest {
+            initiator_id: 1001, channel_id: 1003, user_data: bytes.into(),
+        }).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn suppress_resume_refresh_and_shutdown() {
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let mut server = RdpServer::builder().with_addr(([127,0,0,1],0))
+            .with_no_security().with_no_input().with_display_handler(Display(refreshes.clone())).build();
+        let rect = InclusiveRectangle { left: 0, top: 0, right: 835, bottom: 1579 };
+        assert!(!deliver(&mut server, ShareDataPdu::SuppressOutput(rdp::suppress_output::SuppressOutputPdu { desktop_rect: None })).await);
+        assert!(server.display_suppressed.load(Ordering::Acquire));
+        deliver(&mut server, ShareDataPdu::RefreshRectangle(rdp::refresh_rectangle::RefreshRectanglePdu { areas_to_refresh: vec![rect.clone()] })).await;
+        assert!(server.display_suppressed.load(Ordering::Acquire));
+        assert_eq!(refreshes.load(Ordering::Relaxed), 1);
+        deliver(&mut server, ShareDataPdu::SuppressOutput(rdp::suppress_output::SuppressOutputPdu { desktop_rect: Some(rect) })).await;
+        assert!(!server.display_suppressed.load(Ordering::Acquire));
+        assert_eq!(refreshes.load(Ordering::Relaxed), 2);
+        assert!(deliver(&mut server, ShareDataPdu::ShutdownRequest).await);
+    }
+
+    #[tokio::test]
+    async fn control_reply_does_not_wait_for_graphics_writer() {
+        let (tx, mut rx) = mpsc::channel(2);
+        let mut graphics = QueuedWriter { tx: tx.clone(), wait: true, suppressed: None };
+        let mut control = QueuedWriter { tx, wait: false, suppressed: None };
+        let write = graphics.write_all(b"graphics");
+        tokio::pin!(write);
+        tokio::select! { result = &mut write => panic!("completed early: {result:?}"), _ = tokio::task::yield_now() => () }
+        control.write_all(b"reply").await.unwrap();
+        let frame = rx.recv().await.unwrap();
+        assert_eq!(frame.bytes, b"graphics");
+        assert_eq!(rx.recv().await.unwrap().bytes, b"reply");
+        frame.done.unwrap().send(()).unwrap();
+        write.await.unwrap();
     }
 }

@@ -175,6 +175,10 @@ impl UpdateEncoder {
         }
     }
 
+    pub(crate) fn invalidate(&mut self) {
+        self.framebuffer = None;
+    }
+
     pub(crate) fn codec_name(&self) -> &'static str {
         match self.bitmap_updater.as_ref() {
             Some(BitmapUpdater::RemoteFx(_)) => "RemoteFX",

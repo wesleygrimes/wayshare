@@ -244,6 +244,12 @@ impl core::fmt::Debug for BitmapUpdate {
 /// See [`RdpServerDisplay`] example.
 #[async_trait::async_trait]
 pub trait RdpServerDisplayUpdates {
+    /// Release the producer after the complete update has been written.
+    fn update_sent(&mut self) {}
+
+    /// Invalidate the legacy framebuffer before the next update.
+    fn take_refresh(&mut self) -> bool { false }
+
     /// # Cancel safety
     ///
     /// This method MUST be cancellation safe because it is used in a
@@ -302,6 +308,9 @@ pub trait RdpServerDisplay: Send {
 
     /// Report the legacy codec selected from the client's bitmap capabilities.
     fn negotiated_legacy_codec(&mut self, _codec: &'static str) {}
+
+    /// Request a full redraw at the current negotiated size.
+    fn request_refresh(&mut self) {}
 
     /// Return a display updates receiver
     async fn updates(&mut self) -> Result<Box<dyn RdpServerDisplayUpdates>>;
