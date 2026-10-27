@@ -37,6 +37,7 @@ pub struct Connection {
     pub handle: Mutex<Option<GfxServerHandle>>,
     state: Arc<Mutex<State>>,
     fail_after: Mutex<Option<u64>>,
+    experimental_remotefx: bool,
 }
 
 struct State {
@@ -46,9 +47,10 @@ struct State {
 }
 
 impl Connection {
-    pub fn new(fail_after: Option<u64>) -> Arc<Self> {
+    pub fn new(fail_after: Option<u64>, experimental_remotefx: bool) -> Arc<Self> {
         Arc::new(Self {
             handle: Mutex::new(None),
+            experimental_remotefx,
             fail_after: Mutex::new(fail_after),
             state: Arc::new(Mutex::new(State {
                 mode: Mode::Waiting,
@@ -87,6 +89,7 @@ impl GfxServerFactory for Factory {
         Box::new(Handler {
             state: self.0.state.clone(),
             preferred: vec![],
+            experimental_remotefx: self.0.experimental_remotefx,
         })
     }
     fn build_server_with_handle(&self) -> Option<(GfxDvcBridge, GfxServerHandle)> {
@@ -101,6 +104,7 @@ impl GfxServerFactory for Factory {
 struct Handler {
     state: Arc<Mutex<State>>,
     preferred: Vec<CapabilitySet>,
+    experimental_remotefx: bool,
 }
 
 fn supports_avc420(cap: &CapabilitySet) -> bool {
@@ -156,15 +160,23 @@ impl GraphicsPipelineHandler for Handler {
         debug!(?cap, "RDP EGFX CapsConfirm");
         let mut state = self.state.lock().unwrap();
         if state.mode == Mode::Waiting {
-            state.mode = if supports_avc420(cap) {
+            state.mode = if self.experimental_remotefx {
+                Mode::EgfxRemoteFx
+            } else if supports_avc420(cap) {
                 Mode::Avc420
             } else {
-                Mode::EgfxRemoteFx
+                Mode::Legacy
             };
             if state.mode == Mode::EgfxRemoteFx {
                 info!(
                     codec = "EGFX RemoteFX",
-                    reason = "client EGFX caps disable AVC420; CAVIDEO available",
+                    reason = "experimental rdp.codec = egfx-remotefx",
+                    "RDP codec negotiated"
+                );
+            } else if state.mode == Mode::Legacy {
+                info!(
+                    codec = "RemoteFX/bitmap",
+                    reason = "client EGFX caps disable AVC420; using legacy graphics",
                     "RDP codec negotiated"
                 );
             }
@@ -312,10 +324,7 @@ impl FrameEncoder {
     fn description(&self) -> (&'static str, &'static str) {
         match self {
             Self::Avc420(_) => ("H.264/AVC420", "client EGFX caps support AVC420"),
-            Self::RemoteFx => (
-                "EGFX RemoteFX",
-                "client EGFX caps disable AVC420; CAVIDEO available",
-            ),
+            Self::RemoteFx => ("EGFX RemoteFX", "experimental rdp.codec = egfx-remotefx"),
         }
     }
 }
@@ -588,7 +597,7 @@ mod tests {
     use ironrdp_dvc::DvcProcessor;
 
     fn negotiate(caps: &[CapabilitySet]) -> (CapabilitySet, Mode) {
-        let connection = Connection::new(None);
+        let connection = Connection::new(None, false);
         let factory = Factory(connection.clone());
         let (_, handle) = factory.build_server_with_handle().unwrap();
         let mut server = handle.lock().unwrap();
@@ -609,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    fn iphone_caps_choose_egfx_remotefx_without_clearing_avc_disabled() {
+    fn iphone_caps_choose_legacy_without_clearing_avc_disabled() {
         let raw = [
             (0x00080004, 0x2_u32),
             (0x00080105, 0x2),
@@ -627,7 +636,7 @@ mod tests {
                 })
                 .collect(),
         );
-        let connection = Connection::new(None);
+        let connection = Connection::new(None, false);
         let (_, handle) = Factory(connection.clone())
             .build_server_with_handle()
             .unwrap();
@@ -645,6 +654,16 @@ mod tests {
                 flags: CapabilitiesV104Flags::SMALL_CACHE | CapabilitiesV104Flags::AVC_DISABLED,
             })
         );
+        assert_eq!(connection.mode(), Mode::Legacy);
+    }
+
+    #[test]
+    fn experimental_remotefx_requires_explicit_opt_in() {
+        let connection = Connection::new(None, true);
+        let mut handler = Factory(connection.clone()).build_gfx_handler();
+        handler.on_ready(&CapabilitySet::V10_4 {
+            flags: CapabilitiesV104Flags::AVC_DISABLED,
+        });
         assert_eq!(connection.mode(), Mode::EgfxRemoteFx);
     }
 
@@ -657,7 +676,7 @@ mod tests {
             (2868, 1320),
             (1320, 2868),
         ] {
-            let connection = Connection::new(None);
+            let connection = Connection::new(None, false);
             let (_, handle) = Factory(connection.clone())
                 .build_server_with_handle()
                 .unwrap();
@@ -732,7 +751,7 @@ mod tests {
         ] {
             let (confirmed, mode) = negotiate(std::slice::from_ref(&cap));
             assert_eq!(confirmed, cap);
-            assert_eq!(mode, Mode::EgfxRemoteFx);
+            assert_eq!(mode, Mode::Legacy);
         }
     }
 
@@ -759,7 +778,7 @@ mod tests {
                 flags: CapabilitiesV10Flags::AVC_DISABLED
             }
         );
-        assert_eq!(mode, Mode::EgfxRemoteFx);
+        assert_eq!(mode, Mode::Legacy);
         assert_eq!(
             negotiate(&[CapabilitySet::V10_1]),
             (CapabilitySet::V10_1, Mode::Avc420)
@@ -768,12 +787,13 @@ mod tests {
 
     #[test]
     fn absent_egfx_and_explicit_fallback_are_permanent_for_the_session() {
-        let connection = Connection::new(None);
+        let connection = Connection::new(None, false);
         connection.state.lock().unwrap().started = Some(Instant::now() - CAPS_TIMEOUT);
         assert_eq!(connection.mode(), Mode::Legacy);
         let mut handler = Handler {
             state: connection.state.clone(),
             preferred: vec![],
+            experimental_remotefx: false,
         };
         handler.on_ready(&CapabilitySet::V10_1);
         assert_eq!(connection.mode(), Mode::Legacy);

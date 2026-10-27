@@ -46,6 +46,8 @@ pub enum RdpCodec {
     Auto,
     H264,
     Remotefx,
+    #[serde(rename = "egfx-remotefx")]
+    EgfxRemotefx,
 }
 
 impl Default for RdpSettings {
@@ -307,6 +309,7 @@ mod tests {
             ("auto", RdpCodec::Auto),
             ("h264", RdpCodec::H264),
             ("remotefx", RdpCodec::Remotefx),
+            ("egfx-remotefx", RdpCodec::EgfxRemotefx),
         ] {
             assert_eq!(
                 Settings::parse(&format!("[rdp]\ncodec = '{value}'"))

@@ -122,8 +122,10 @@ codec = "auto"
 ```
 
 `codec = "auto"` prefers H.264/AVC420 with hardware or software encoding.
-`"h264"` uses the same fallback rules. Clients that disable AVC420 use RemoteFX over
-EGFX. `"remotefx"` forces the legacy codec path.
+`"h264"` uses the same fallback rules. Clients that disable AVC420 use legacy
+RemoteFX or bitmap updates. `"remotefx"` forces the legacy codec path.
+`"egfx-remotefx"` opts into experimental RemoteFX over EGFX. It causes protocol
+errors in the iOS Windows App and is excluded from auto selection.
 
 For remote access, set `enabled = true` and `listen = "0.0.0.0:3389"`, or choose one
 LAN or Tailscale address. A non-loopback listener requires Apple mode credentials;

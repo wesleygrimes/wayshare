@@ -97,7 +97,7 @@ async fn serve_local(
                 let fail_after = if listen.ip().is_loopback() {
                     std::env::var("WAYSHARE_TEST_RDP_FAIL_AFTER").ok().and_then(|s| s.parse().ok())
                 } else { None };
-                let gfx = (codec != RdpCodec::Remotefx).then(|| gfx::Connection::new(fail_after));
+                let gfx = (codec != RdpCodec::Remotefx).then(|| gfx::Connection::new(fail_after, codec == RdpCodec::EgfxRemotefx));
                 let gfx_factory = gfx.as_ref().map(|connection| {
                     Box::new(gfx::Factory(connection.clone())) as Box<dyn ironrdp_server::GfxServerFactory>
                 });

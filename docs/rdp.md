@@ -30,17 +30,22 @@ explicit configuration choice.
 
 ## Video codec
 
-`rdp.codec` accepts `"auto"`, `"h264"` and `"remotefx"`. The default, `"auto"`, prefers
-H.264/AVC420 over the Graphics Pipeline Extension, MS-RDPEGFX. `"h264"` has the same
+`rdp.codec` accepts `"auto"`, `"h264"`, `"remotefx"` and `"egfx-remotefx"`.
+The default, `"auto"`, prefers H.264/AVC420 over the Graphics Pipeline Extension,
+MS-RDPEGFX. `"h264"` has the same
 fallback rules. `"remotefx"` disables EGFX and uses the client's legacy RemoteFX
 capability. Clients without RemoteFX receive compressed bitmap updates.
 
 The server confirms the highest client-advertised EGFX version. It uses AVC420 only
 when that version permits it. Version 8.1 requires `AVC420_ENABLED`. Clients without
-AVC420 support use RemoteFX over EGFX, with codec ID `CAVIDEO`. This does not require
-legacy RemoteFX capabilities. Clients without EGFX use legacy RemoteFX or bitmap
-updates. The server preserves the client's capability flags. When AVC is available,
-it sends AVC420 only, even if the selected version also supports AVC444.
+AVC420 support use legacy RemoteFX or bitmap updates. Clients without EGFX use
+the same legacy path. The server preserves the client's capability flags. When AVC
+is available, it sends AVC420 only, even if the selected version also supports
+AVC444.
+
+`"egfx-remotefx"` explicitly selects experimental RemoteFX over EGFX with codec ID
+`CAVIDEO`. This path causes protocol errors in the iOS Windows App and is excluded
+from `"auto"` and `"h264"`. Use it only to test EGFX compatibility.
 
 On Linux, H.264 first tries VA-API Constrained Baseline on `/dev/dri/renderD128`, using
 8-bit NV12, constant QP 24, I and P pictures, and one reference picture. The driver
