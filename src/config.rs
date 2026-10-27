@@ -36,6 +36,16 @@ pub struct RdpSettings {
     pub listen: SocketAddr,
     /// PEM certificate and private key. Defaults to the config directory.
     pub identity_file: Option<PathBuf>,
+    pub codec: RdpCodec,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RdpCodec {
+    #[default]
+    Auto,
+    H264,
+    Remotefx,
 }
 
 impl Default for RdpSettings {
@@ -44,6 +54,7 @@ impl Default for RdpSettings {
             enabled: false,
             listen: "127.0.0.1:3389".parse().unwrap(),
             identity_file: None,
+            codec: RdpCodec::Auto,
         }
     }
 }
@@ -287,6 +298,25 @@ mod tests {
         assert_eq!(s.rdp.listen, "127.0.0.1:3389".parse().unwrap());
         assert_eq!(s.listen.port(), 5900);
         assert_eq!(s.keyboard().unwrap().command, ModTarget::Super);
+    }
+
+    #[test]
+    fn rdp_codec_defaults_and_values() {
+        assert_eq!(Settings::default().rdp.codec, RdpCodec::Auto);
+        for (value, expected) in [
+            ("auto", RdpCodec::Auto),
+            ("h264", RdpCodec::H264),
+            ("remotefx", RdpCodec::Remotefx),
+        ] {
+            assert_eq!(
+                Settings::parse(&format!("[rdp]\ncodec = '{value}'"))
+                    .unwrap()
+                    .rdp
+                    .codec,
+                expected
+            );
+        }
+        assert!(Settings::parse("[rdp]\ncodec = 'avc444'").is_err());
     }
 
     #[test]

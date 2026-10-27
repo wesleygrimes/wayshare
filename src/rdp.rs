@@ -1,6 +1,9 @@
 //! Authenticated TLS RDP adapter over the shared capture and input factories.
 
+mod encoder;
+mod gfx;
 mod input;
+use crate::config::RdpCodec;
 use std::io::{ErrorKind, Write};
 use std::net::SocketAddr;
 use std::num::{NonZeroU16, NonZeroUsize};
@@ -23,7 +26,7 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{Instrument, debug, info, warn};
 use zeroize::Zeroizing;
 
 use crate::input::InputFactory;
@@ -38,10 +41,13 @@ pub async fn serve(
     inputs: Option<InputFactory>,
     display: Option<Arc<dyn DisplayControl>>,
     auth: AuthConfig,
+    codec: RdpCodec,
 ) -> Result<()> {
     // The protocol library uses Rc internally, so poll connections on this local executor.
     tokio::task::LocalSet::new()
-        .run_until(serve_local(listen, identity, frames, inputs, display, auth))
+        .run_until(serve_local(
+            listen, identity, frames, inputs, display, auth, codec,
+        ))
         .await
 }
 
@@ -52,6 +58,7 @@ async fn serve_local(
     inputs: Option<InputFactory>,
     display: Option<Arc<dyn DisplayControl>>,
     auth: AuthConfig,
+    codec: RdpCodec,
 ) -> Result<()> {
     ensure!(
         !auth.security_types().is_empty(),
@@ -63,6 +70,12 @@ async fn serve_local(
     let (width, height) =
         tokio::task::spawn_blocking(move || Ok::<_, anyhow::Error>(probe()?.size())).await??;
     ensure!(width > 0 && height > 0, "empty RDP desktop");
+    if codec != RdpCodec::Remotefx {
+        match encoder::Encoder::new(256, 256) {
+            Ok(encoder) => info!(encoder = encoder.name(), "RDP H.264 available"),
+            Err(error) => warn!(%error, "RDP H.264 unavailable; RemoteFX fallback"),
+        }
+    }
     let listener = bind_listener(listen, Some(&auth)).await?;
     let bound = listener.local_addr()?;
     let mut sessions = tokio::task::JoinSet::new();
@@ -81,6 +94,13 @@ async fn serve_local(
                 let size = DesktopSize { width, height };
                 let extent = Arc::new(Mutex::new(size));
                 let target = Arc::new(Mutex::new(size));
+                let fail_after = if listen.ip().is_loopback() {
+                    std::env::var("WAYSHARE_TEST_RDP_FAIL_AFTER").ok().and_then(|s| s.parse().ok())
+                } else { None };
+                let gfx = (codec != RdpCodec::Remotefx).then(|| gfx::Connection::new(fail_after));
+                let gfx_factory = gfx.as_ref().map(|connection| {
+                    Box::new(gfx::Factory(connection.clone())) as Box<dyn ironrdp_server::GfxServerFactory>
+                });
                 let mut server = RdpServer::builder()
                     .with_addr(bound)
                     .with_tls(tls.clone())
@@ -91,11 +111,13 @@ async fn serve_local(
                     .with_display_handler(Display {
                         frames: frames.clone(), size: DesktopSize { width, height },
                         authenticated: authenticated.clone(),
-                        extent, target, control: display.clone(), session, started: false,
+                        extent, target, control: display.clone(), session, started: false, gfx,
                     })
+                    .with_gfx_factory(gfx_factory)
                     .with_honor_client_desktop_size(true)
                     .with_credential_validator(Some(Arc::new(login)))
                     .build();
+                let span = tracing::info_span!("rdp", %peer, session);
                 session += 1;
                 sessions.spawn_local(async move {
                     // An idle pre-login client cannot occupy a slot indefinitely.
@@ -109,7 +131,7 @@ async fn serve_local(
                         },
                         () = deadline => info!(%peer, "RDP login timed out"),
                     }
-                });
+                }.instrument(span));
             },
             Some(result) = sessions.join_next(), if !sessions.is_empty() => {
                 if let Err(error) = result { warn!(%error, "RDP session task failed"); }
@@ -226,6 +248,7 @@ struct Display {
     control: Option<Arc<dyn DisplayControl>>,
     session: SessionId,
     started: bool,
+    gfx: Option<Arc<gfx::Connection>>,
 }
 
 fn validate_size(width: u32, height: u32) -> Result<DesktopSize> {
@@ -359,10 +382,13 @@ impl RdpServerDisplay for Display {
         let frames = self.frames.clone();
         let size = self.size;
         let target = self.target.clone();
+        let gfx = self.gfx.clone();
+        let span = tracing::Span::current();
         let thread = std::thread::Builder::new()
             .name("rdp-capture".into())
             .spawn(move || {
-                let result = capture(frames, size, &target, &sender, &worker_stop);
+                let _guard = span.enter();
+                let result = capture(frames, size, &target, &sender, &worker_stop, gfx);
                 if let Err(e) = result {
                     let _ = sender.blocking_send(Err(e));
                 }
@@ -381,6 +407,7 @@ fn capture(
     target: &Mutex<DesktopSize>,
     sender: &mpsc::Sender<Result<DisplayUpdate>>,
     stop: &AtomicBool,
+    gfx: Option<Arc<gfx::Connection>>,
 ) -> Result<()> {
     // Resize updates end this worker. Reactivation opens capture at the new mode
     // and builds a fresh encoder before any bitmap of the new dimensions is sent.
@@ -391,14 +418,50 @@ fn capture(
     }
     let mut source = frames()?;
     let mut first = true;
+    let mut dirty = true;
+    let mut delivered = 0_u64;
+    let mut stream: Option<gfx::Stream> = None;
+    if gfx.is_none() {
+        info!(
+            codec = "RemoteFX/bitmap",
+            reason = "rdp.codec = remotefx",
+            "RDP codec negotiated"
+        );
+    }
     while !stop.load(Ordering::Relaxed) {
         let requested = *target.lock().unwrap();
         if requested != size {
             let _ = sender.blocking_send(Ok(DisplayUpdate::Resize(requested)));
             return Ok(());
         }
-        let changed = source.advance();
-        if first || changed {
+        dirty |= source.advance();
+        if let Some(connection) = &gfx {
+            match connection.mode() {
+                gfx::Mode::Waiting => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                }
+                gfx::Mode::Avc420 if stream.is_none() => {
+                    match gfx::Stream::new(connection.clone(), size) {
+                        Ok(new) => {
+                            stream = Some(new);
+                            dirty = true;
+                        }
+                        Err(error) => {
+                            connection.fallback(&format!("H.264 initialization failed: {error:#}"))
+                        }
+                    }
+                }
+                gfx::Mode::RemoteFx if stream.is_some() => {
+                    connection.fallback("EGFX channel closed");
+                    // A closed DVC can no longer carry DeleteSurface; reactivate legacy graphics.
+                    let _ = sender.blocking_send(Ok(DisplayUpdate::Resize(size)));
+                    return Ok(());
+                }
+                _ => (),
+            }
+        }
+        if first || dirty || stream.as_ref().is_some_and(gfx::Stream::needs_frame) {
             let frame = source.frame();
             let fitted;
             let frame = if (frame.width, frame.height) == (size.width, size.height) {
@@ -410,14 +473,34 @@ fn capture(
             if first {
                 debug!(frame = ?(frame.width, frame.height), ?size, "RDP first frame size");
             }
-            let update = bitmap(frame)?;
-            if sender
-                .blocking_send(Ok(DisplayUpdate::Bitmap(update)))
-                .is_err()
-            {
+            let update = if let Some(active) = &mut stream {
+                match active.frame(frame) {
+                    Ok(Some(messages)) => DisplayUpdate::Egfx(messages),
+                    Ok(None) => {
+                        std::thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(error) => {
+                        gfx.as_ref()
+                            .unwrap()
+                            .fallback(&format!("H.264 failed: {error:#}"));
+                        if let Ok(messages) = active.retire() {
+                            let _ = sender.blocking_send(Ok(DisplayUpdate::Egfx(messages)));
+                        }
+                        let _ = sender.blocking_send(Ok(DisplayUpdate::Resize(size)));
+                        return Ok(());
+                    }
+                }
+            } else {
+                DisplayUpdate::Bitmap(bitmap(frame)?)
+            };
+            if sender.blocking_send(Ok(update)).is_err() {
                 break;
             }
+            delivered += 1;
+            debug!(frames = delivered, "RDP frame queued");
             first = false;
+            dirty = false;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -509,6 +592,7 @@ mod tests {
             control: None,
             session: 1 << 63,
             started: false,
+            gfx: None,
         }
     }
 
@@ -950,6 +1034,7 @@ mod tests {
             control: None,
             session: 1 << 63,
             started: false,
+            gfx: None,
             authenticated: authenticated.clone(),
         };
         assert!(display.updates().await.is_err());
@@ -1004,6 +1089,7 @@ mod tests {
             control: None,
             session: 1 << 63,
             started: false,
+            gfx: None,
         };
         let mut updates = display.updates().await.unwrap();
         let update = tokio::time::timeout(Duration::from_secs(5), updates.next_update())

@@ -380,6 +380,7 @@ async fn run(s: Settings) -> Result<()> {
             cfg.input.clone(),
             cfg.display.clone(),
             cfg.auth.clone(),
+            s.rdp.codec,
         );
         tokio::pin!(rdp);
         let mut rdp_result = Ok(());

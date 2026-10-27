@@ -19,6 +19,9 @@ pub use ironrdp_graphics::image_processing::PixelFormat;
 #[derive(Debug, Clone)]
 pub enum DisplayUpdate {
     Resize(DesktopSize),
+    /// DVC PDUs for EGFX, serialized with the capture queue to preserve reset/frame ordering.
+    #[cfg(feature = "egfx")]
+    Egfx(Vec<Vec<u8>>),
     Bitmap(BitmapUpdate),
     PointerPosition(PointerPositionAttribute),
     ColorPointer(ColorPointer),

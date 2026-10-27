@@ -17,6 +17,7 @@ chroma = "420"                        # "444" needs encoder = "x265"
 audio = true                          # stream the default sink monitor (AAC-ELD)
 
 [rdp]
+codec = "auto"                        # auto | h264 | remotefx; h264 also permits fallback
 enabled = false                       # TLS and shared Apple login; included in default builds
 listen = "127.0.0.1:3389"              # set a network address explicitly for remote access
 # Use "0.0.0.0:3389" for all IPv4 interfaces. Network binds require Apple mode credentials.

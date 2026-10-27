@@ -117,8 +117,12 @@ The runtime listener stays disabled, with `127.0.0.1:3389` as its default addres
 [rdp]
 enabled = false
 listen = "127.0.0.1:3389"
+codec = "auto"
 # identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
 ```
+
+`codec = "auto"` prefers H.264/AVC420 with hardware or software encoding.
+`"h264"` uses the same fallback rules. `"remotefx"` forces the legacy codec path.
 
 For remote access, set `enabled = true` and `listen = "0.0.0.0:3389"`, or choose one
 LAN or Tailscale address. A non-loopback listener requires Apple mode credentials;

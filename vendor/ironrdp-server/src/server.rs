@@ -24,7 +24,7 @@ use ironrdp_pdu::rdp::server_error_info::{ErrorInfo, ProtocolIndependentCode, Se
 use ironrdp_pdu::x224::X224;
 use ironrdp_pdu::{Action, PduResult, decode_err, mcs, nego, rdp};
 use ironrdp_rdpsnd as rdpsnd;
-use ironrdp_svc::{ChannelFlags, StaticChannelId, StaticChannelSet, SvcProcessor, server_encode_svc_messages};
+use ironrdp_svc::{ChannelFlags, StaticChannelId, StaticChannelSet, SvcProcessor, SvcMessage, server_encode_svc_messages};
 use ironrdp_tokio::{FramedRead, FramedWrite, TokioFramed, split_tokio_framed, unsplit_tokio_framed};
 use rdpsnd::server::{RdpsndServer, RdpsndServerMessage};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _};
@@ -1060,7 +1060,22 @@ impl RdpServer {
         io_channel_id: u16,
         buffer: &mut Vec<u8>,
         mut encoder: UpdateEncoder,
+        #[cfg(feature = "egfx")] drdynvc_channel_id: Option<u16>,
     ) -> Result<(RunState, UpdateEncoder)> {
+        #[cfg(feature = "egfx")]
+        let update = match update {
+            DisplayUpdate::Egfx(pdus) => {
+                let channel_id = drdynvc_channel_id.context("EGFX requires DRDYNVC")?;
+                let messages = pdus
+                    .into_iter()
+                    .map(|pdu| SvcMessage::from(pdu).with_flags(ChannelFlags::SHOW_PROTOCOL))
+                    .collect();
+                let data = server_encode_svc_messages(messages, channel_id, user_channel_id)?;
+                writer.write_all(&data).await?;
+                return Ok((RunState::Continue, encoder));
+            }
+            update => update,
+        };
         if let DisplayUpdate::Resize(desktop_size) = update {
             debug!(?desktop_size, "Display resize");
             encoder.set_desktop_size(desktop_size);
@@ -1251,6 +1266,8 @@ impl RdpServer {
     {
         debug!("Starting client loop");
         let mut display_updates = self.display.lock().await.updates().await?;
+        #[cfg(feature = "egfx")]
+        let drdynvc_channel_id = self.get_channel_id_by_type::<dvc::DrdynvcServer>();
         let mut writer = SharedWriter::new(writer);
         let mut display_writer = writer.clone();
         let mut event_writer = writer.clone();
@@ -1292,6 +1309,8 @@ impl RdpServer {
                             io_channel_id,
                             &mut buffer,
                             encoder,
+                            #[cfg(feature = "egfx")]
+                            drdynvc_channel_id,
                         )
                         .await?
                         {

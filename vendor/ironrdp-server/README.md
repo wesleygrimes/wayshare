@@ -15,6 +15,8 @@ Local changes:
   and process queued input after the display extent is set.
 - Log negotiated static channels, client capabilities and channel responses under the
   application RDP debug target. Log Display Control caps only after the write succeeds.
+- Carry EGFX DVC output through the bounded display queue so frames, resets and legacy
+  fallback remain ordered across reactivation. Log the available legacy codec at info.
 - Use project punctuation in imported comments.
 - Add `zeroize` and use a local package manifest without the upstream lint configuration.
 
@@ -23,4 +25,4 @@ The live authentication proof checks rejection before streaming. Recheck these c
 when updating the dependency. The rest of the upstream implementation is unchanged.
 
 CredSSP dependencies remain unconditional in connector 0.10. This patch does not remove
-them or enable them in the application. Optional server features remain off.
+them or enable them in the application. The application enables EGFX. Other optional server features remain off.

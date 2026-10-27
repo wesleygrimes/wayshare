@@ -1,6 +1,6 @@
 # RDP
 
-RDP streams the shared monitor over TLS with RemoteFX or compressed bitmap updates.
+RDP streams the shared monitor over TLS with H.264/AVC420, RemoteFX or compressed bitmap updates.
 It uses the same username and password as Apple Screen Sharing, including high
 performance mode. RDP is included in the default Cargo features. Its runtime listener
 is disabled by default, with `127.0.0.1:3389` as the default address.
@@ -12,6 +12,7 @@ Build with `--no-default-features` to omit RDP.
 [rdp]
 enabled = true
 listen = "127.0.0.1:3389"
+codec = "auto"
 # identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
 ```
 
@@ -26,6 +27,51 @@ sending a password. RDP has no discovery advertisement. Port 3389 is the standar
 Enabling RDP automatically alongside RFB would require changing `rdp.enabled` and
 choosing a bind address. That changes which network listeners start, so it remains an
 explicit configuration choice.
+
+## Video codec
+
+`rdp.codec` accepts `"auto"`, `"h264"` and `"remotefx"`. The default, `"auto"`, prefers
+H.264/AVC420 over the Graphics Pipeline Extension, MS-RDPEGFX. `"h264"` has the same
+fallback rules. `"remotefx"` disables EGFX and uses the client's legacy RemoteFX
+capability. Clients without RemoteFX receive compressed bitmap updates.
+
+The server confirms the highest client-advertised EGFX version. It uses AVC420 only
+when that version permits it. Version 8.1 requires `AVC420_ENABLED`. Version 8 and versions with `AVC_DISABLED` use
+the legacy path. The server preserves the client's capability flags. It sends AVC420
+only, even if the selected version also supports AVC444.
+
+On Linux, H.264 first tries VA-API Constrained Baseline on `/dev/dri/renderD128`, using
+8-bit NV12, constant QP 24, I and P pictures, and one reference picture. The driver
+must support YUV420, constant-QP encoding and packed SPS/PPS/slice headers. The encoder
+uploads the captured RGB frame and uses VA-API's video processor to convert it. If initialization fails,
+OpenH264 provides a software Baseline encoder. If neither encoder works, the session
+uses RemoteFX. These encoders are separate from Apple high-performance mode's HEVC
+encoder.
+
+Coded dimensions round up to multiples of 16. One region mask covers the visible
+surface and crops the padding. SPS, PPS and an IDR start each stream. A size change
+reactivates RDP, resets EGFX, creates and maps a new surface, and starts a new IDR.
+Display Control and pointer scaling use the same visible dimensions as RemoteFX.
+
+The server allows at most two unacknowledged frames. Cumulative acknowledgements
+release earlier frames. If the client suspends acknowledgements, the bounded capture
+queue and ten-frame-per-second limit pace delivery without retaining frame records.
+A two-second ACK or decode-progress stall, or an encoder error, resets the surface
+and encoder for a new IDR. A second failure falls back to RemoteFX for that connection.
+The connection and input remain active. A closed EGFX channel also uses the legacy
+path. Recovery cannot fix a client that closes the entire RDP connection.
+
+Startup logs `RDP H.264 available` with the encoder name. Each connection logs
+`RDP codec negotiated`, including the codec and reason. Legacy fallback logs use
+`RemoteFX/bitmap`; `RDP legacy codec available` gives the actual legacy codec.
+Connection logs include the peer address and session ID. Enable
+`RUST_LOG=info,wayshare::rdp=debug` for `CapsAdvertise`, `CapsConfirm`, AVC420 frame IDs,
+ACKs and the client's decoded-frame count. FreeRDP can request this path with
+`/gfx:avc420`; use `-gfx /rfx` to test the legacy path.
+
+For an isolated loopback test, `WAYSHARE_TEST_RDP_FAIL_AFTER=20` injects one encoder
+failure after 20 AVC420 frames in each connection. Network listeners ignore this
+variable. It is unset in normal use.
 
 ## Shared login
 
@@ -138,12 +184,13 @@ Match device and a dynamic-resolution toggle are unconfirmed on iOS. The guide d
 similar controls on other platforms; their names and availability must not be assumed
 on iPhone. Try reconnecting after selecting a resolution, then test rotation both ways.
 
-Clipboard, sound and hardware RDP video encoding remain unsupported.
+Clipboard, sound and AVC444 remain unsupported.
 Microsoft clients on Windows, iOS, Android and macOS need separate interoperability tests.
 
 ## Dependencies
 
-The server's optional codecs and helpers remain disabled. Connector 0.10 unconditionally
+The server enables its optional EGFX support. Other optional codecs and helpers remain disabled.
+OpenH264 is built from source under its BSD license. Connector 0.10 unconditionally
 links `picky` and `sspi` with smart-card support. Cargo's additive features cannot remove
 that path. `deny.toml` therefore ignores only RUSTSEC-2023-0071 and RUSTSEC-2023-0089,
 with reasons for each. The RSA and smart-card paths are unused by this TLS listener.
