@@ -658,6 +658,41 @@ mod tests {
     }
 
     #[test]
+    fn remotefx_context_and_tileset_modes_agree() {
+        let frame = Frame {
+            width: 65,
+            height: 65,
+            pixels: vec![0x00336699; 65 * 65],
+        };
+        let data = FrameEncoder::RemoteFx.encode(&frame, true).unwrap();
+        let mut remaining = data.as_slice();
+        let mut context_mode = None;
+        let mut tileset_mode = None;
+        while !remaining.is_empty() {
+            let block_type = u16::from_le_bytes(remaining[..2].try_into().unwrap());
+            let len = u32::from_le_bytes(remaining[2..6].try_into().unwrap()) as usize;
+            let block = &remaining[..len];
+            match block_type {
+                0xccc3 => {
+                    let properties = u16::from_le_bytes(block[11..13].try_into().unwrap());
+                    context_mode = Some(properties & 7);
+                }
+                0xccc7 => {
+                    let properties = u16::from_le_bytes(block[12..14].try_into().unwrap());
+                    tileset_mode = Some((properties >> 1) & 7);
+                }
+                _ => (),
+            }
+            remaining = &remaining[len..];
+        }
+        assert!(context_mode.is_some());
+        assert_eq!(
+            context_mode, tileset_mode,
+            "MS-RDPRFX 2.2.2.3.4 requires matching flags"
+        );
+    }
+
+    #[test]
     fn experimental_remotefx_requires_explicit_opt_in() {
         let connection = Connection::new(None, true);
         let mut handler = Factory(connection.clone()).build_gfx_handler();

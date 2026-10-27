@@ -23,6 +23,7 @@ Local changes:
 - Pad compressed bitmap scanlines to four pixels without enlarging their destination.
   Count cropped rows by their declared height, including the final partial stride.
 - Expose the existing RemoteFX encoder for EGFX CAVIDEO, with complete stream headers.
+- Set RemoteFX CONTEXT and TILESET to video mode, as required by MS-RDPRFX 2.2.2.3.4.
 - Use project punctuation in imported comments.
 - Add `zeroize` and use a local package manifest without the upstream lint configuration.
 

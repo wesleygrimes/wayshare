@@ -43,7 +43,9 @@ impl RfxEncoder {
             let height = desktop_size.height;
             Block::Sync(SyncPdu).encode(&mut cursor)?;
             let context = rfx::ContextPdu {
-                flags: OperatingMode::IMAGE_MODE,
+                // MS-RDPRFX 2.2.2.3.4 requires CONTEXT and TILESET mode flags to agree.
+                // TileSetPdu encodes video mode, so the context must use it too.
+                flags: OperatingMode::empty(),
                 entropy_algorithm,
             };
             Block::CodecChannel(CodecChannel::Context(context)).encode(&mut cursor)?;
