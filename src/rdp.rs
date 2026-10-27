@@ -1,21 +1,6 @@
 //! Authenticated TLS RDP adapter over the shared capture and input factories.
 
 mod input;
-#[cfg(target_os = "linux")]
-mod pam;
-#[cfg(not(target_os = "linux"))]
-mod pam {
-    pub fn service() -> &'static str {
-        "wayshare"
-    }
-    pub fn current_user() -> anyhow::Result<String> {
-        anyhow::bail!("RDP PAM login requires Linux")
-    }
-    pub fn authenticate(_: &str, _: &str, _: &str) -> anyhow::Result<bool> {
-        anyhow::bail!("RDP PAM login requires Linux")
-    }
-}
-
 use std::io::{ErrorKind, Write};
 use std::net::SocketAddr;
 use std::num::{NonZeroU16, NonZeroUsize};
@@ -25,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::rfb::{DisplayControl, SessionId};
+use crate::auth::Authenticator;
+use crate::rfb::{AuthConfig, DisplayControl, SessionId};
 use anyhow::{Context, Result, ensure};
 use ironrdp_displaycontrol::pdu::DisplayControlMonitorLayout;
 use ironrdp_server::tokio_rustls::{TlsAcceptor, rustls};
@@ -51,18 +37,11 @@ pub async fn serve(
     frames: FrameSourceFactory,
     inputs: Option<InputFactory>,
     display: Option<Arc<dyn DisplayControl>>,
-    allowed_user: Option<&str>,
+    auth: AuthConfig,
 ) -> Result<()> {
     // The protocol library uses Rc internally, so poll connections on this local executor.
     tokio::task::LocalSet::new()
-        .run_until(serve_local(
-            listen,
-            identity,
-            frames,
-            inputs,
-            display,
-            allowed_user,
-        ))
+        .run_until(serve_local(listen, identity, frames, inputs, display, auth))
         .await
 }
 
@@ -72,19 +51,22 @@ async fn serve_local(
     frames: FrameSourceFactory,
     inputs: Option<InputFactory>,
     display: Option<Arc<dyn DisplayControl>>,
-    allowed_user: Option<&str>,
+    auth: AuthConfig,
 ) -> Result<()> {
-    let pam_login = Arc::new(PamLogin::new(allowed_user)?);
+    ensure!(
+        !auth.security_types().is_empty(),
+        "RDP requires Apple mode credentials"
+    );
+    let auth = Arc::new(auth);
     let (tls, fingerprint) = tls_acceptor(identity)?;
     let probe = frames.clone();
     let (width, height) =
         tokio::task::spawn_blocking(move || Ok::<_, anyhow::Error>(probe()?.size())).await??;
     ensure!(width > 0 && height > 0, "empty RDP desktop");
-    let listener = bind_listener(listen, Some(&pam_login)).await?;
+    let listener = bind_listener(listen, Some(&auth)).await?;
     let bound = listener.local_addr()?;
     let mut sessions = tokio::task::JoinSet::new();
-    info!(listen = %bound, user = %pam_login.user, service = pam_login.service,
-        "RDP listener ready with TLS and PAM");
+    info!(listen = %bound, "RDP listener ready with TLS and shared Apple credentials");
     info!(sha256 = %fingerprint, "RDP TLS certificate fingerprint (SHA-256, colon-separated hex)");
     // RFB allocates low IDs; reserve the upper half for RDP display ownership.
     let mut session: SessionId = 1 << 63;
@@ -92,10 +74,10 @@ async fn serve_local(
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, peer) = accepted?;
-                // Bound unauthenticated handshakes and slow PAM workers as well as sessions.
+                // Bound unauthenticated handshakes and credential workers as well as sessions.
                 if sessions.len() >= 8 { drop(stream); continue; }
                 let authenticated = Arc::new(AtomicBool::new(false));
-                let login = Login { pam: pam_login.clone(), authenticated: authenticated.clone() };
+                let login = Login { auth: auth.clone(), authenticated: authenticated.clone() };
                 let size = DesktopSize { width, height };
                 let extent = Arc::new(Mutex::new(size));
                 let target = Arc::new(Mutex::new(size));
@@ -136,37 +118,14 @@ async fn serve_local(
     }
 }
 
-struct PamLogin {
-    user: String,
-    service: &'static str,
-}
-
-impl PamLogin {
-    fn new(allowed_user: Option<&str>) -> Result<Self> {
-        ensure!(cfg!(target_os = "linux"), "RDP PAM login requires Linux");
-        let user = match allowed_user {
-            Some(user) => user.to_owned(),
-            None => pam::current_user()?,
-        };
-        ensure!(
-            !user.is_empty() && !user.contains(['\0', '\\', '@']),
-            "invalid RDP account"
-        );
-        Ok(Self {
-            user,
-            service: pam::service(),
-        })
-    }
-}
-
 async fn bind_listener(
     listen: SocketAddr,
-    pam_login: Option<&PamLogin>,
+    auth: Option<&AuthConfig>,
 ) -> Result<tokio::net::TcpListener> {
-    // Require the same PAM policy that each connection installs as its validator.
+    // Require the same credentials that each connection installs as its validator.
     ensure!(
-        listen.ip().is_loopback() || pam_login.is_some(),
-        "RDP non-loopback listener {listen} requires active PAM authentication"
+        listen.ip().is_loopback() || auth.is_some_and(|auth| !auth.security_types().is_empty()),
+        "RDP non-loopback listener {listen} requires Apple mode credentials"
     );
     tokio::net::TcpListener::bind(listen)
         .await
@@ -174,7 +133,7 @@ async fn bind_listener(
 }
 
 struct Login {
-    pam: Arc<PamLogin>,
+    auth: Arc<AuthConfig>,
     authenticated: Arc<AtomicBool>,
 }
 
@@ -186,19 +145,14 @@ impl CredentialValidator for Login {
     ) -> Result<CredentialDecision, CredentialValidationError> {
         let started = tokio::time::Instant::now();
         let mut accepted = false;
-        if credentials.username == self.pam.user
-            && credentials.domain.as_deref().is_none_or(str::is_empty)
-            && !credentials.password.is_empty()
-            && credentials.password.len() <= 4096
-        {
-            let user = self.pam.user.clone();
+        if credentials.domain.as_deref().is_none_or(str::is_empty) {
+            let auth = self.auth.clone();
+            let user = credentials.username.clone();
             let password = Zeroizing::new(credentials.password.clone());
-            let service = self.pam.service;
-            match tokio::task::spawn_blocking(move || pam::authenticate(service, &user, &password))
-                .await
+            match tokio::task::spawn_blocking(move || auth.verify(&user, password.as_bytes())).await
             {
-                Ok(Ok(valid)) => accepted = valid,
-                _ => warn!("RDP PAM backend failed"),
+                Ok(valid) => accepted = valid,
+                Err(_) => warn!("RDP credential worker failed"),
             }
         }
         if accepted {
@@ -206,7 +160,7 @@ impl CredentialValidator for Login {
             info!("RDP login accepted");
             Ok(CredentialDecision::Accept)
         } else {
-            // Sleep only this connection, including failures rejected before reaching PAM.
+            // Sleep only this connection, including failures rejected before credential verification.
             tokio::time::sleep_until(started + Duration::from_secs(2)).await;
             info!("RDP login rejected; no frames sent");
             Ok(CredentialDecision::Reject)
@@ -891,7 +845,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn network_bind_requires_pam_before_opening_a_socket() {
+    async fn network_bind_requires_apple_credentials_before_opening_a_socket() {
         for address in ["0.0.0.0:0", "[::]:0", "192.0.2.1:0", "[2001:db8::1]:0"] {
             let error = bind_listener(address.parse().unwrap(), None)
                 .await
@@ -899,21 +853,59 @@ mod tests {
             assert!(
                 error
                     .to_string()
-                    .contains("requires active PAM authentication")
+                    .contains("requires Apple mode credentials")
             );
         }
         let local = bind_listener("127.0.0.1:0".parse().unwrap(), None)
             .await
             .unwrap();
         assert!(local.local_addr().unwrap().ip().is_loopback());
-        #[cfg(target_os = "linux")]
-        {
-            let pam = PamLogin::new(None).unwrap();
-            let network = bind_listener("0.0.0.0:0".parse().unwrap(), Some(&pam))
+        let auth = AuthConfig {
+            dh: Some(Arc::new(crate::auth::StaticPassword::new("viewer", "test"))),
+            ..Default::default()
+        };
+        let network = bind_listener("0.0.0.0:0".parse().unwrap(), Some(&auth))
+            .await
+            .unwrap();
+        assert!(network.local_addr().unwrap().ip().is_unspecified());
+        assert!(
+            bind_listener("0.0.0.0:0".parse().unwrap(), Some(&AuthConfig::default()))
                 .await
-                .unwrap();
-            assert!(network.local_addr().unwrap().ip().is_unspecified());
-        }
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn login_accepts_apple_srp_username_without_local_account_rules() {
+        let authenticated = Arc::new(AtomicBool::new(false));
+        let login = Login {
+            auth: Arc::new(AuthConfig {
+                srp: Some(crate::rfb::srp::VerifierRecord::generate(
+                    "Viewer@rdp",
+                    b"test",
+                    4,
+                )),
+                dh: None,
+            }),
+            authenticated: authenticated.clone(),
+        };
+        let mut credentials = Credentials {
+            username: "Viewer@rdp".into(),
+            password: "test".into(),
+            domain: Some(String::new()),
+        };
+        assert!(matches!(
+            login.validate(&credentials).await.unwrap(),
+            CredentialDecision::Accept
+        ));
+        assert!(authenticated.load(Ordering::Acquire));
+        authenticated.store(false, Ordering::Release);
+        credentials.domain = Some("DOMAIN".into());
+        assert!(matches!(
+            login.validate(&credentials).await.unwrap(),
+            CredentialDecision::Reject
+        ));
+        assert!(!authenticated.load(Ordering::Acquire));
     }
 
     #[test]
@@ -928,9 +920,11 @@ mod tests {
     async fn denied_login_cannot_start_capture_and_failure_delay_is_per_connection() {
         let authenticated = Arc::new(AtomicBool::new(false));
         let login = Login {
-            pam: Arc::new(PamLogin {
-                user: "allowed".into(),
-                service: "wayshare",
+            auth: Arc::new(AuthConfig {
+                dh: Some(Arc::new(crate::auth::StaticPassword::new(
+                    "allowed", "test",
+                ))),
+                ..Default::default()
             }),
             authenticated: authenticated.clone(),
         };

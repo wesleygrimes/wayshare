@@ -4,21 +4,19 @@
 cargo test
 ```
 
-Tests run on Linux and macOS. Capture, input, PAM login and encoding only work on Linux.
+Tests run on Linux and macOS. Capture, input and encoding only work on Linux.
 Default builds include RDP; `cargo build --locked --no-default-features` omits it.
-PAM is linked directly on Linux, so no binding generator or PAM Rust crate is required.
-See [RDP](rdp.md) for the PAM service file packagers must install.
 
 ## Build prerequisites
 
 Rust 1.89 or newer ([rustup](https://rustup.rs) or your distro's package), a C linker,
-`pkg-config`, and the EGL, GBM and PAM development files:
+`pkg-config`, and the EGL and GBM development files:
 
 | Distro | Packages |
 |---|---|
-| Arch | `base-devel mesa libglvnd pam` |
-| Debian, Ubuntu | `build-essential pkg-config libegl-dev libgbm-dev libpam0g-dev` |
-| Fedora | `gcc pkgconf-pkg-config libglvnd-devel mesa-libgbm-devel pam-devel` |
+| Arch | `base-devel mesa libglvnd` |
+| Debian, Ubuntu | `build-essential pkg-config libegl-dev libgbm-dev` |
+| Fedora | `gcc pkgconf-pkg-config libglvnd-devel mesa-libgbm-devel` |
 
 ## Installing from source
 

@@ -36,8 +36,6 @@ pub struct RdpSettings {
     pub listen: SocketAddr,
     /// PEM certificate and private key. Defaults to the config directory.
     pub identity_file: Option<PathBuf>,
-    /// Exact local PAM account. Unset uses the account for the real process UID.
-    pub allowed_user: Option<String>,
 }
 
 impl Default for RdpSettings {
@@ -46,7 +44,6 @@ impl Default for RdpSettings {
             enabled: false,
             listen: "127.0.0.1:3389".parse().unwrap(),
             identity_file: None,
-            allowed_user: None,
         }
     }
 }
@@ -225,17 +222,6 @@ impl Settings {
             if !cfg!(feature = "rdp") {
                 bail!("RDP needs a build with --features rdp");
             }
-            if !cfg!(target_os = "linux") {
-                bail!("RDP PAM login requires Linux");
-            }
-            if self
-                .rdp
-                .allowed_user
-                .as_ref()
-                .is_some_and(|user| user.is_empty() || user.contains(['\0', '\\', '@']))
-            {
-                bail!("rdp.allowed_user must be a local account name");
-            }
             if self
                 .rdp
                 .identity_file
@@ -304,19 +290,17 @@ mod tests {
     }
 
     #[test]
-    fn rdp_requires_the_feature_and_linux() {
+    fn rdp_requires_the_feature() {
         let local = "[rdp]\nenabled = true\nlisten = '127.0.0.1:13389'";
-        assert_eq!(
-            Settings::parse(local).is_ok(),
-            cfg!(all(feature = "rdp", target_os = "linux"))
-        );
+        assert_eq!(Settings::parse(local).is_ok(), cfg!(feature = "rdp"));
         for address in ["0.0.0.0:3389", "[::]:3389", "[::ffff:192.0.2.1]:3389"] {
             assert!(
                 Settings::parse(&format!("[rdp]\nenabled = true\nlisten = '{address}'")).is_ok()
-                    == cfg!(all(feature = "rdp", target_os = "linux"))
+                    == cfg!(feature = "rdp")
             );
         }
         assert!(Settings::parse("[rdp]\nenabled = true\nidentity_file = 'relative.pem'").is_err());
+        assert!(Settings::parse("[rdp]\nallowed_user = 'old-pam-user'").is_err());
     }
 
     #[test]

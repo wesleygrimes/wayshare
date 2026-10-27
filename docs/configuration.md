@@ -110,23 +110,21 @@ enabled = true
 
 ## RDP
 
-Default builds include RDP with TLS, local Linux password login through PAM, and input.
+Default builds include RDP with TLS, the Apple mode username and password, and input.
 The runtime listener stays disabled, with `127.0.0.1:3389` as its default address.
 
 ```toml
 [rdp]
 enabled = false
 listen = "127.0.0.1:3389"
-# allowed_user = "alice"  # defaults to the account running wayshare
 # identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
 ```
 
 For remote access, set `enabled = true` and `listen = "0.0.0.0:3389"`, or choose one
-LAN or Tailscale address. A non-loopback listener requires active PAM authentication;
-startup fails otherwise. Run as the desktop owner; on Arch a non-root process cannot
-verify another user's password. Startup logs the bound address and certificate SHA-256
-fingerprint as colon-separated hex bytes. Compare it with the client's SHA-256
+LAN or Tailscale address. A non-loopback listener requires Apple mode credentials;
+startup fails otherwise. Use the exact Apple mode username and an empty domain.
+Startup logs the bound address and certificate SHA-256 fingerprint as colon-separated hex bytes. Compare it with the client's SHA-256
 certificate details before sending a password, and allow the TCP port in your firewall.
-See [RDP](rdp.md) for PAM packaging, username policy and limitations, including native
-monitor capture regardless of the requested client size. `--no-default-features` omits
-RDP from the build.
+See [RDP](rdp.md) for shared credentials, username policy and limitations, including
+client-size capture and Display Control resizing. `--no-default-features` omits RDP from
+the build.

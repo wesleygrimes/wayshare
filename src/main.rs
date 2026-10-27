@@ -33,7 +33,7 @@ struct ServeArgs {
     config: Option<PathBuf>,
     #[arg(long)]
     listen: Option<SocketAddr>,
-    /// Enable the TLS RDP listener with local PAM login.
+    /// Enable the TLS RDP listener with shared Apple login.
     #[arg(long, overrides_with = "no_rdp")]
     rdp: bool,
     #[arg(long)]
@@ -379,7 +379,7 @@ async fn run(s: Settings) -> Result<()> {
             cfg.frame_source.clone(),
             cfg.input.clone(),
             cfg.display.clone(),
-            s.rdp.allowed_user.as_deref(),
+            cfg.auth.clone(),
         );
         tokio::pin!(rdp);
         let mut rdp_result = Ok(());

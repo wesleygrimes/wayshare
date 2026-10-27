@@ -1,9 +1,10 @@
 # RDP
 
 RDP streams the shared monitor over TLS with RemoteFX or compressed bitmap updates.
-It uses the local Linux password through PAM. RDP is included in default builds but
-its listener is disabled in config. The default address is `127.0.0.1:3389`.
-Build with `--no-default-features` to omit RDP. PAM login requires Linux.
+It uses the same username and password as Apple Screen Sharing, including high
+performance mode. RDP is included in the default Cargo features. Its runtime listener
+is disabled by default, with `127.0.0.1:3389` as the default address.
+Build with `--no-default-features` to omit RDP.
 
 ## Enable the listener
 
@@ -12,54 +13,50 @@ Build with `--no-default-features` to omit RDP. PAM login requires Linux.
 enabled = true
 listen = "127.0.0.1:3389"
 # identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
-# allowed_user = "alice"
 ```
 
-`--rdp`, `--no-rdp`, `--rdp-listen` and `--rdp-identity-file` override the corresponding
-settings. A build without RDP rejects an enabled listener. RFB still needs its own
-SRP verifier. Linux passwords do not replace RFB credentials.
-
-To accept connections from another device, set `enabled = true` and
-`listen = "0.0.0.0:3389"` for all IPv4 interfaces, or choose one LAN or Tailscale address.
-`[::]:3389` binds IPv6; IPv4 access through that socket depends on the host's socket
-policy. Startup rejects a non-loopback listener without active PAM authentication.
-There is no setting to disable PAM login. The default stays off at `127.0.0.1:3389`.
+`--rdp`, `--no-rdp`, `--rdp-listen` and `--rdp-identity-file` override these settings.
+A build without RDP rejects an enabled listener. To accept connections from another
+device, set `listen = "0.0.0.0:3389"`, or choose one LAN or Tailscale address.
+`[::]:3389` binds IPv6; IPv4 access depends on the host's socket policy.
+Startup requires Apple mode credentials before opening the RDP listener.
 Allow the chosen TCP port through your firewall and verify the certificate before
 sending a password. RDP has no discovery advertisement. Port 3389 is the standard port.
 
-## Login and PAM packaging
+Enabling RDP automatically alongside RFB would require changing `rdp.enabled` and
+choosing a bind address. That changes which network listeners start, so it remains an
+explicit configuration choice.
 
-The client must send the exact local username and an empty domain. Without
-`allowed_user`, wayshare resolves the account for its real process UID, ignoring `$USER`.
-`allowed_user` restricts login to that one account. It does not change the server's UID
-or the desktop being shared. On Arch, non-root `pam_unix` can verify only the calling
-user through `unix_chkpwd`. Run wayshare as the desktop owner and leave `allowed_user`
-unset, or set it to that same account. Do not run the desktop server as root to allow
-other users to log in.
+## Shared login
 
-Both PAM authentication and account checks must pass before capture updates or input
-start. Empty passwords, nonempty domains, expired accounts and passwords that need
-changing are rejected. Failed attempts wait at least two seconds. Each connection runs
-separately, so one login's PAM work and delay do not block other connections. At most
-eight connections are admitted, with a 30-second login deadline.
+Use the exact, case-sensitive username set by `wayshare setup` or `wayshare set-password`,
+and leave the RDP domain empty. The username need not be a Linux account. Both protocols
+load `srp_file` from the same config, defaulting to
+`$XDG_CONFIG_HOME/wayshare/srp-$USER` or `~/.config/wayshare/srp-$USER`.
+The file contains the username, salt, iteration count and SRP verifier. It contains no
+password. RDP derives a verifier from the submitted password and compares it with that
+same record. Changing the wayshare password changes both logins after restart.
 
-Packagers should install `contrib/pam.d/wayshare` as `/etc/pam.d/wayshare`, owned by root
-and mode 0644. The supplied service includes Arch's `system-auth` for authentication
-and account policy. Adapt the include names to the distribution's PAM stack. It opens
-no login session and does not change process credentials. If the service file is absent,
-wayshare uses `system-auth` if present, otherwise `login`. It never tries a second service
-after a failed authentication. Distribution lockout and account policy still apply.
+The development ARD path, configured by `dev.dh_username` and `dev.dh_password_file`,
+also shares its exact username and password checks with RDP. The password-file loader
+trims trailing CR and LF bytes. When both Apple methods are configured, either credential
+works. There is no PAM or keyring lookup. Linux account expiry and lockout policies do
+not apply. The former `rdp.allowed_user` key has been removed; remove it from old configs
+and use the Apple username in the client.
 
-Passwords are used only for the PAM conversation. Wayshare does not save them to config,
-files or logs. Owned validation copies and decoded credentials are cleared after use,
-including cancellation. Transport and PAM may make their own temporary copies; this is
-not a guarantee that every copy in process memory is erased. There is no NLA, CredSSP,
-password database or smart-card login. A client or policy that requires NLA cannot connect.
+Credentials must pass before capture updates or input start. Failed attempts wait at
+least two seconds. Password verification runs on blocking workers, and the delay affects
+only the failed connection. At most eight connections are admitted, with a 30-second
+login deadline. Submitted passwords are not saved or logged. Owned validation copies and
+decoded credentials are cleared after use, including cancellation. This does not
+guarantee that every temporary copy in process memory is erased.
+TLS remains required. There is no NLA, CredSSP or smart-card login. A client that requires
+NLA cannot connect.
 
-Connect with FreeRDP 3, using its password prompt rather than a password argument:
+Connect with FreeRDP 3, using the configured Apple username and the password prompt:
 
 ```sh
-xfreerdp3 /v:127.0.0.1:3389 /sec:tls /u:"$(id -un)" /from-stdin:force
+xfreerdp3 /v:127.0.0.1:3389 /sec:tls /u:alice /from-stdin:force
 ```
 
 Verify the server certificate before supplying a real password. Do not use `/cert:ignore`
@@ -136,7 +133,7 @@ Microsoft clients on Windows, iOS, Android and macOS need separate interoperabil
 The server's optional codecs and helpers remain disabled. Connector 0.10 unconditionally
 links `picky` and `sspi` with smart-card support. Cargo's additive features cannot remove
 that path. `deny.toml` therefore ignores only RUSTSEC-2023-0071 and RUSTSEC-2023-0089,
-with reasons for each. The RSA and smart-card paths are unused by this TLS/PAM listener.
+with reasons for each. The RSA and smart-card paths are unused by this TLS listener.
 These exceptions do not establish that those dependencies are safe for other uses.
 
 The local server dependency patch clears credentials promptly, rejects missing initial
