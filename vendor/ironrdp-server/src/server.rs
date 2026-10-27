@@ -12,7 +12,8 @@ use ironrdp_cliprdr::CliprdrServer;
 use ironrdp_cliprdr::backend::ClipboardMessage;
 use ironrdp_core::{decode, encode_vec, impl_as_any};
 use ironrdp_displaycontrol::pdu::DisplayControlMonitorLayout;
-use ironrdp_displaycontrol::server::{DisplayControlHandler, DisplayControlServer};
+use ironrdp_displaycontrol::server::DisplayControlHandler;
+use crate::display_control::DisplayControlServer;
 use ironrdp_dvc as dvc;
 use ironrdp_pdu::input::InputEventPdu;
 use ironrdp_pdu::input::fast_path::{FastPathInput, FastPathInputEvent};
@@ -1524,6 +1525,9 @@ impl RdpServer {
         let desktop_size = self.display.lock().await.size().await;
         let encoder = UpdateEncoder::new(desktop_size, surface_flags, update_codecs, self.opts.max_request_size)
             .context("failed to initialize update encoder")?;
+        let codec = encoder.codec_name();
+        self.display.lock().await.negotiated_legacy_codec(codec);
+        tracing::info!(target: "wayshare::rdp", codec, reason = "client legacy capabilities", "RDP legacy codec available");
 
         let state = self
             .client_loop(
@@ -1716,7 +1720,7 @@ impl RdpServer {
                     // DisplayControlServer::start generates caps on the successful DVC create response.
                     // Log after writing, so an open channel alone is not mistaken for sent caps.
                     if caps_generated {
-                        debug!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), "RDP Display Control caps sent");
+                        debug!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), caps = ?crate::display_control::capabilities(), "RDP Display Control caps sent");
                     }
                     debug!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), ?svc, "RDP static channel processed");
                 } else {

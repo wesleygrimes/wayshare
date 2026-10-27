@@ -17,6 +17,10 @@ Local changes:
   application RDP debug target. Log Display Control caps only after the write succeeds.
 - Carry EGFX DVC output through the bounded display queue so frames, resets and legacy
   fallback remain ordered across reactivation. Log the available legacy codec at info.
+- Advertise one Display Control monitor with an area limit of 8192 by 8192,
+  and log every received Display Control PDU before decoding it.
+- Report the selected legacy codec to the display handler for session summaries.
+- Pad compressed bitmap scanlines to four pixels without enlarging their destination.
 - Use project punctuation in imported comments.
 - Add `zeroize` and use a local package manifest without the upstream lint configuration.
 

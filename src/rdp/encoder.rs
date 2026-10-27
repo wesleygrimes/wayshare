@@ -124,19 +124,32 @@ mod tests {
 
     #[test]
     fn software_idr_and_pictures_decode_at_macroblock_size() {
-        let frame = Frame {
-            width: 202,
-            height: 301,
-            pixels: vec![0x33aa66; 202 * 301],
-        };
-        assert_eq!(yuv(&frame).unwrap().dimensions(), (208, 304));
-        let mut encoder = Encoder::software().unwrap();
-        let mut decoder = openh264::decoder::Decoder::new().unwrap();
-        for idr in [true, false, true] {
-            let data = encoder.encode(&frame, idr).unwrap();
-            let picture = decoder.decode(&data).unwrap().unwrap();
-            assert_eq!(picture.dimensions(), (208, 304));
-            assert!(picture.y()[0] > 100);
+        for (width, height) in [
+            (202, 301),
+            (836, 1580),
+            (1580, 797),
+            (1579, 797),
+            (2868, 1320),
+            (1320, 2868),
+        ] {
+            let frame = Frame {
+                width,
+                height,
+                pixels: vec![0x33aa66; usize::from(width) * usize::from(height)],
+            };
+            let coded = (
+                usize::from(width).next_multiple_of(16),
+                usize::from(height).next_multiple_of(16),
+            );
+            assert_eq!(yuv(&frame).unwrap().dimensions(), coded);
+            let mut encoder = Encoder::software().unwrap();
+            let mut decoder = openh264::decoder::Decoder::new().unwrap();
+            for idr in [true, false, true] {
+                let data = encoder.encode(&frame, idr).unwrap();
+                let picture = decoder.decode(&data).unwrap().unwrap();
+                assert_eq!(picture.dimensions(), coded);
+                assert!(picture.y()[0] > 100);
+            }
         }
     }
 }

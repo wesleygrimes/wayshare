@@ -158,17 +158,6 @@ impl UpdateEncoder {
             BitmapUpdater::Bitmap(BitmapHandler::new())
         };
 
-        let codec = match &bitmap_updater {
-            BitmapUpdater::RemoteFx(_) => "RemoteFX",
-            #[cfg(feature = "qoi")]
-            BitmapUpdater::Qoi(_) => "QOI",
-            #[cfg(feature = "qoiz")]
-            BitmapUpdater::Qoiz(_) => "QOIZ",
-            #[cfg(feature = "nscodec")]
-            BitmapUpdater::NsCodec(_) => "NSCodec",
-            _ => "bitmap",
-        };
-        tracing::info!(target: "wayshare::rdp", codec, reason = "client legacy capabilities", "RDP legacy codec available");
 
         Ok(Self {
             desktop_size,
@@ -183,6 +172,19 @@ impl UpdateEncoder {
         EncoderIter {
             encoder: self,
             state: State::Start(update),
+        }
+    }
+
+    pub(crate) fn codec_name(&self) -> &'static str {
+        match self.bitmap_updater.as_ref() {
+            Some(BitmapUpdater::RemoteFx(_)) => "RemoteFX",
+            #[cfg(feature = "qoi")]
+            Some(BitmapUpdater::Qoi(_)) => "QOI",
+            #[cfg(feature = "qoiz")]
+            Some(BitmapUpdater::Qoiz(_)) => "QOIZ",
+            #[cfg(feature = "nscodec")]
+            Some(BitmapUpdater::NsCodec(_)) => "NSCodec",
+            _ => "bitmap",
         }
     }
 

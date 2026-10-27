@@ -515,7 +515,14 @@ mod tests {
     #[test]
     #[ignore = "requires a VA-API H.264 encoder on /dev/dri/renderD128"]
     fn vaapi_idr_pictures_and_reset_decode() {
-        for (width, height) in [(256, 256), (836, 1580), (1580, 836)] {
+        for (width, height) in [
+            (256, 256),
+            (836, 1580),
+            (1580, 797),
+            (1579, 797),
+            (2868, 1320),
+            (1320, 2868),
+        ] {
             let frame = RgbFrame {
                 width,
                 height,

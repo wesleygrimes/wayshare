@@ -126,8 +126,11 @@ impl Input {
     }
 
     fn pointer(&mut self) -> Result<()> {
+        let _ = self.sink()?;
+        self.x = self.x.clamp(0, i32::from(self.width.saturating_sub(1)));
+        self.y = self.y.clamp(0, i32::from(self.height.saturating_sub(1)));
         let (x, y, buttons) = (self.x, self.y, self.buttons);
-        if let Some(sink) = self.sink()? {
+        if let Some(sink) = self.sink.as_mut() {
             sink.pointer(x, y, buttons)?;
         }
         Ok(())
@@ -446,6 +449,45 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn absolute_pointer_and_button_coordinates_are_clamped_to_odd_desktop() {
+        let events = Arc::new(Mutex::new(vec![]));
+        let recorder = events.clone();
+        let mut input = Input {
+            factory: Some(Arc::new(move |_, _| Ok(Box::new(Sink(recorder.clone()))))),
+            authenticated: Arc::new(AtomicBool::new(true)),
+            extent: Arc::new(Mutex::new(DesktopSize {
+                width: 1579,
+                height: 797,
+            })),
+            width: 3456,
+            height: 2160,
+            sink: None,
+            buttons: 0,
+            x: 0,
+            y: 0,
+            surrogate: [None; 2],
+            shortcut_modifiers: 0,
+        };
+        input.mouse(MouseEvent::Move {
+            x: u16::MAX,
+            y: u16::MAX,
+        });
+        assert_eq!(events.lock().unwrap().last().unwrap(), "pointer 1578 796 0");
+        input.mouse(MouseEvent::Buttons {
+            x: 65535,
+            y: 65535,
+            buttons: 1,
+            pressed: true,
+        });
+        assert_eq!(events.lock().unwrap().last().unwrap(), "pointer 1578 796 1");
+        input.mouse(MouseEvent::RelMove {
+            x: i32::MIN,
+            y: i32::MIN,
+        });
+        assert_eq!(events.lock().unwrap().last().unwrap(), "pointer 0 0 1");
     }
 
     #[test]

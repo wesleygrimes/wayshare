@@ -11,6 +11,7 @@ mod builder;
 mod capabilities;
 mod clipboard;
 mod display;
+pub mod display_control;
 mod echo;
 mod encoder;
 #[cfg(feature = "egfx")]
