@@ -1386,7 +1386,7 @@ impl RdpServer {
         self.static_channels = result.static_channels;
         if !result.reactivation {
             for (_type_id, channel, channel_id) in self.static_channels.iter_mut() {
-                debug!(?channel, ?channel_id, "Start");
+                debug!(target: "wayshare::rdp", ?channel, ?channel_id, "RDP static channel negotiated");
                 let Some(channel_id) = channel_id else {
                     continue;
                 };
@@ -1680,6 +1680,7 @@ impl RdpServer {
 
                 if let Some(svc) = self.static_channels.get_by_channel_id_mut(data.channel_id) {
                     let response_pdus = svc.process(&data.user_data)?;
+                    debug!(target: "wayshare::rdp", channel_id = data.channel_id, ?svc, "RDP static channel processed");
                     let response = server_encode_svc_messages(response_pdus, data.channel_id, user_channel_id)?;
                     writer.write_all(&response).await?;
                 } else {

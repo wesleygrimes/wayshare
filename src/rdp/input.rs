@@ -20,6 +20,7 @@ pub(super) struct Input {
     pub x: i32,
     pub y: i32,
     pub surrogate: [Option<u16>; 2],
+    pub shortcut_modifiers: u8,
 }
 
 impl Input {
@@ -55,14 +56,41 @@ impl Input {
             KeyboardEvent::Pressed { code, extended }
             | KeyboardEvent::Released { code, extended } => {
                 let down = matches!(event, KeyboardEvent::Pressed { .. });
-                if let Some(code) = scancode(code, extended)
-                    && let Some(sink) = self.sink()?
-                {
-                    sink.physical_key(down, code)?;
+                if let Some(code) = scancode(code, extended) {
+                    let bit = match code {
+                        29 => 1,
+                        97 => 2,
+                        56 => 4,
+                        100 => 8,
+                        125 => 16,
+                        126 => 32,
+                        _ => 0,
+                    };
+                    self.shortcut_modifiers =
+                        (self.shortcut_modifiers & !bit) | if down { bit } else { 0 };
+                    if bit != 0 || code == 57 {
+                        debug!(
+                            down,
+                            code,
+                            modifiers = self.shortcut_modifiers,
+                            "RDP shortcut scancode"
+                        );
+                    }
+                    if let Some(sink) = self.sink()? {
+                        sink.physical_key(down, code)?;
+                    }
                 }
             }
             KeyboardEvent::UnicodePressed(unit) | KeyboardEvent::UnicodeReleased(unit) => {
                 let down = matches!(event, KeyboardEvent::UnicodePressed(_));
+                if unit == 32 || self.shortcut_modifiers != 0 {
+                    debug!(
+                        down,
+                        space = unit == 32,
+                        modifiers = self.shortcut_modifiers,
+                        "RDP unicode shortcut event"
+                    );
+                }
                 let pending = &mut self.surrogate[usize::from(down)];
                 let scalar = if (0xd800..=0xdbff).contains(&unit) {
                     *pending = Some(unit);
@@ -365,6 +393,7 @@ mod tests {
                 x: 0,
                 y: 0,
                 surrogate: [None; 2],
+                shortcut_modifiers: 0,
             };
             for (width, height) in [(1728, 1080), (1580, 836), (836, 1580)] {
                 *extent.lock().unwrap() = DesktopSize { width, height };
@@ -438,6 +467,7 @@ mod tests {
             x: 0,
             y: 0,
             surrogate: [None; 2],
+            shortcut_modifiers: 0,
         };
         input.keyboard(KeyboardEvent::Pressed {
             code: 0x1e,

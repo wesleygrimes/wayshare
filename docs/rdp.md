@@ -94,9 +94,13 @@ openssl x509 -in /absolute/path/rdp-identity.pem -noout -fingerprint -sha256
 
 Keyboard scancodes map to Linux evdev codes through the shared input sink and keyboard
 engine. PC modifiers bypass the Mac Command/Option remapping. Unicode input includes
-UTF-16 surrogate pairs. Absolute and relative pointer movement, five mouse buttons,
-and vertical and horizontal wheel deltas use the shared pointer engine and Wayland
-virtual devices. `[input] enabled = false` disables input for both protocols. Disconnect
+UTF-16 surrogate pairs. With Super, Ctrl or Alt held, Unicode Space uses the physical
+Space key on every layout. Printable US shortcut keys keep all held modifiers, including
+Shift. Plain Unicode typing keeps its text-entry behavior. Other printable shortcuts
+on non-US layouts still use the keysym path.
+
+Absolute and relative pointer movement, five mouse buttons, and vertical and horizontal
+wheel deltas use the shared pointer engine and Wayland virtual devices. `[input] enabled = false` disables input for both protocols. Disconnect
 releases held keys and buttons. RFB and RDP share desktop focus, so concurrent input
 from viewers can interfere.
 
@@ -108,8 +112,9 @@ maps that extent onto the output's logical size, so output scale needs no extra 
 Enable `resize = true` to fit the shared output to the client's requested pixel size.
 RDP uses the same display owner as RFB and restores the original mode on disconnect.
 Only one session can own output mode changes. The output keeps its current scale; mode
-sizes may round down to whole logical pixels. Frames scale to the exact client size
-when the output mode differs, resizing is disabled, or another session owns the output.
+sizes may round down to whole logical pixels. After a successful resize, the session
+uses the applied mode's dimensions for frames and pointer coordinates. If resizing is
+disabled, fails, or another session owns the output, frames scale to the client size.
 
 Display Control supports one primary monitor at the origin. Rotation requests can use
 portrait or landscape dimensions. Width must be even, and both dimensions must be

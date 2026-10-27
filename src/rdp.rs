@@ -104,7 +104,7 @@ async fn serve_local(
                     .with_tls(tls.clone())
                     .with_input_handler(input::Input {
                         factory: inputs.clone(), authenticated: authenticated.clone(),
-                        extent: extent.clone(), width, height, sink: None, buttons: 0, x: 0, y: 0, surrogate: [None; 2],
+                        extent: extent.clone(), width, height, sink: None, buttons: 0, x: 0, y: 0, surrogate: [None; 2], shortcut_modifiers: 0,
                     })
                     .with_display_handler(Display {
                         frames: frames.clone(), size: DesktopSize { width, height },
@@ -305,14 +305,26 @@ fn layout_size(layout: &DisplayControlMonitorLayout) -> Result<DesktopSize> {
 }
 
 impl Display {
-    fn resize_output(&self, size: DesktopSize) {
+    fn resize_output(&self, size: DesktopSize) -> DesktopSize {
         if let Some(control) = &self.control {
             match control.configure_size(self.session, size.width.into(), size.height.into()) {
-                Ok(Some(applied)) => debug!(?size, ?applied, "RDP output resized"),
+                Ok(Some(applied)) => {
+                    let actual = validate_size(applied.pixels.0.into(), applied.pixels.1.into());
+                    match actual {
+                        Ok(actual) => {
+                            debug!(?size, ?applied, "RDP output resized");
+                            return actual;
+                        }
+                        Err(error) => {
+                            warn!(%error, ?applied, "RDP output size cannot be negotiated; scaling frames")
+                        }
+                    }
+                }
                 Ok(None) => debug!(?size, "RDP output unchanged; scaling frames"),
                 Err(error) => warn!(%error, "RDP output resize failed; scaling frames"),
             }
         }
+        size
     }
 }
 
@@ -355,7 +367,7 @@ impl RdpServerDisplay for Display {
                         .is_ok()
                 });
                 if ready {
-                    self.resize_output(size);
+                    *self.target.lock().unwrap() = self.resize_output(size);
                 }
             }
         } else {
@@ -373,8 +385,8 @@ impl RdpServerDisplay for Display {
         match layout_size(&layout) {
             Ok(size) => {
                 if *self.target.lock().unwrap() != size {
-                    self.resize_output(size);
-                    *self.target.lock().unwrap() = size;
+                    let actual = self.resize_output(size);
+                    *self.target.lock().unwrap() = actual;
                 }
             }
             Err(error) => warn!(%error, "RDP layout rejected"),
@@ -441,6 +453,9 @@ fn capture(
                 fitted = fit_frame(frame, size)?;
                 &fitted
             };
+            if first {
+                debug!(frame = ?(frame.width, frame.height), ?size, "RDP first frame size");
+            }
             let update = bitmap(frame)?;
             if sender
                 .blocking_send(Ok(DisplayUpdate::Bitmap(update)))
@@ -668,6 +683,86 @@ mod tests {
                 *owner = None;
             }
             Ok(())
+        }
+    }
+
+    struct RoundedDisplay;
+
+    impl DisplayControl for RoundedDisplay {
+        fn configure(
+            &self,
+            _: SessionId,
+            _: &crate::display::apple::DisplayRequest,
+        ) -> Result<Option<crate::rfb::AppliedDisplay>> {
+            unreachable!()
+        }
+        fn configure_size(
+            &self,
+            _: SessionId,
+            width: u32,
+            height: u32,
+        ) -> Result<Option<crate::rfb::AppliedDisplay>> {
+            Ok(Some(crate::rfb::AppliedDisplay {
+                pixels: (width as u16, (height & !1) as u16),
+                points: (width as u16 / 2, height as u16 / 2),
+                scale: 2.0,
+            }))
+        }
+        fn restore(&self, _: SessionId) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn rounded_mode_reactivates_frames_and_pointer_at_the_applied_size() {
+        let mut display = display(DesktopSize {
+            width: 3456,
+            height: 2160,
+        });
+        display.control = Some(Arc::new(RoundedDisplay));
+        for requested in [
+            DesktopSize {
+                width: 836,
+                height: 1581,
+            },
+            DesktopSize {
+                width: 1580,
+                height: 837,
+            },
+            DesktopSize {
+                width: 836,
+                height: 1581,
+            },
+        ] {
+            if display.started {
+                display.request_layout(
+                    DisplayControlMonitorLayout::new_single_primary_monitor(
+                        requested.width.into(),
+                        requested.height.into(),
+                        None,
+                        None,
+                    )
+                    .unwrap(),
+                );
+            } else {
+                display.request_initial_size(requested).await;
+            }
+            let actual = DesktopSize {
+                width: requested.width,
+                height: requested.height & !1,
+            };
+            let mut updates = display.updates().await.unwrap();
+            assert!(
+                matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Resize(s)) if s == actual)
+            );
+            drop(updates);
+            display.request_initial_size(actual).await;
+            assert_eq!(*display.extent.lock().unwrap(), actual);
+            let mut updates = display.updates().await.unwrap();
+            assert!(
+                matches!(updates.next_update().await.unwrap(), Some(DisplayUpdate::Bitmap(b))
+                if (b.width.get(), b.height.get()) == (actual.width, actual.height))
+            );
         }
     }
 
