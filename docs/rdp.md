@@ -49,7 +49,8 @@ uses RemoteFX. These encoders are separate from Apple high-performance mode's HE
 encoder.
 
 Coded dimensions round up to multiples of 16. One region mask covers the visible
-surface and crops the padding. SPS, PPS and an IDR start each stream. A size change
+surface and crops the padding. The H.264 level covers both the coded area and each
+dimension. SPS, PPS and an IDR start each stream. A size change
 reactivates RDP, resets EGFX, creates and maps a new surface, and starts a new IDR.
 Display Control and pointer scaling use the same visible dimensions as RemoteFX.
 

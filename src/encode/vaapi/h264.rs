@@ -8,6 +8,7 @@ use anyhow::ensure;
 pub struct H264Encoder {
     width: u32,
     height: u32,
+    level: u8,
     enc_config: VAConfigID,
     enc_ctx: VAContextID,
     vpp_config: VAConfigID,
@@ -25,6 +26,11 @@ pub struct H264Encoder {
 impl H264Encoder {
     pub fn new(node: &Path, width: u16, height: u16) -> Result<Self> {
         ensure!(width > 0 && height > 0, "empty H.264 picture");
+        let (width, height) = (
+            u32::from(width).next_multiple_of(16),
+            u32::from(height).next_multiple_of(16),
+        );
+        let level = h264::level(width, height).context("H.264 dimensions exceed level 5.1")?;
         let display = Display::open(node)?;
         let profile = VAProfile::VAProfileH264ConstrainedBaseline;
         let entry = display
@@ -66,8 +72,9 @@ impl H264Encoder {
         attrs[0].value = VA_RT_FORMAT_YUV420;
         attrs[1].value = VA_RC_CQP;
         let mut s = Self {
-            width: u32::from(width).next_multiple_of(16),
-            height: u32::from(height).next_multiple_of(16),
+            width,
+            height,
+            level,
             enc_config: VA_INVALID_ID,
             enc_ctx: VA_INVALID_ID,
             vpp_config: VA_INVALID_ID,
@@ -315,15 +322,7 @@ impl H264Encoder {
         // SAFETY: These libva parameter structs contain only integers, bitfields and arrays.
         // All-zero initializes reserved fields; active fields and invalid references are set below.
         let mut seq: VAEncSequenceParameterBufferH264 = unsafe { std::mem::zeroed() };
-        let macroblocks = self.width * self.height / 256;
-        ensure!(macroblocks <= 36864, "H.264 dimensions exceed level 5.1");
-        seq.level_idc = if macroblocks <= 8192 {
-            40
-        } else if macroblocks <= 22080 {
-            50
-        } else {
-            51
-        };
+        seq.level_idc = self.level;
         seq.intra_period = 300;
         seq.intra_idr_period = 300;
         seq.ip_period = 1;

@@ -2,6 +2,19 @@
 
 use super::hevc::BitWriter;
 
+/// H.264 Annex A limits both macroblock area and each dimension squared to eight
+/// times MaxFS. At ten pictures per second these levels also cover the MB/s limit.
+pub fn level(width: u32, height: u32) -> Option<u8> {
+    if width == 0 || height == 0 || !width.is_multiple_of(16) || !height.is_multiple_of(16) {
+        return None;
+    }
+    let (w, h) = (u64::from(width / 16), u64::from(height / 16));
+    [(40, 8192), (50, 22080), (51, 36864)]
+        .into_iter()
+        .find(|(_, max_fs)| w * h <= *max_fs && w * w <= 8 * max_fs && h * h <= 8 * max_fs)
+        .map(|(level, _)| level)
+}
+
 pub fn parameter_sets(width: u32, height: u32, level: u8) -> [Vec<u8>; 2] {
     let mut s = BitWriter::default();
     s.u(8, 66); // Baseline profile, with constraint_set0/1 for Constrained Baseline.
@@ -108,4 +121,31 @@ fn nal(header: u8, data: &[u8]) -> Vec<u8> {
         zeros = if b == 0 { zeros + 1 } else { 0 };
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn level_covers_phone_sizes_and_the_default_desktop() {
+        assert_eq!(level(848, 1584), Some(40));
+        assert_eq!(level(1584, 848), Some(40));
+        assert_eq!(level(3456, 2160), Some(51));
+    }
+
+    #[test]
+    fn thin_desktops_respect_dimension_limits_as_well_as_area() {
+        assert_eq!(level(4096, 208), Some(40));
+        assert_eq!(level(4320, 208), Some(50));
+        assert_eq!(level(8192, 208), Some(51));
+        assert_eq!(level(208, 8192), Some(51));
+    }
+
+    #[test]
+    fn unaligned_or_oversized_pictures_have_no_hardware_level() {
+        for (w, h) in [(0, 16), (836, 1580), (8192, 8192), (8704, 208)] {
+            assert_eq!(level(w, h), None);
+        }
+    }
 }
