@@ -16,7 +16,10 @@ Rust 1.89 or newer ([rustup](https://rustup.rs) or your distro's package), a C l
 |---|---|
 | Arch | `base-devel mesa libglvnd` |
 | Debian, Ubuntu | `build-essential pkg-config libegl-dev libgbm-dev` |
-| Fedora | `gcc pkgconf-pkg-config libglvnd-devel mesa-libgbm-devel` |
+| Fedora | `gcc gcc-c++ pkgconf-pkg-config libglvnd-devel mesa-libgbm-devel` |
+
+Default builds also need a C++ compiler for the OpenH264 software fallback.
+`--no-default-features` omits RDP and OpenH264.
 
 ## Installing from source
 
