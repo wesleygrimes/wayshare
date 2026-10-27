@@ -1,6 +1,8 @@
 //! HEVC encoding of captured frames as four independent horizontal-strip streams (HP mode tiles).
 
 pub mod convert;
+#[cfg(feature = "rdp")]
+pub mod h264;
 pub mod hevc;
 pub mod nal;
 pub mod plan;
