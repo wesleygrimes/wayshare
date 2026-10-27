@@ -21,6 +21,7 @@ Local changes:
   and log every received Display Control PDU before decoding it.
 - Report the selected legacy codec to the display handler for session summaries.
 - Pad compressed bitmap scanlines to four pixels without enlarging their destination.
+- Expose the existing RemoteFX encoder for EGFX CAVIDEO, with complete stream headers.
 - Use project punctuation in imported comments.
 - Add `zeroize` and use a local package manifest without the upstream lint configuration.
 

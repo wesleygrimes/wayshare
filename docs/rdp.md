@@ -36,9 +36,11 @@ fallback rules. `"remotefx"` disables EGFX and uses the client's legacy RemoteFX
 capability. Clients without RemoteFX receive compressed bitmap updates.
 
 The server confirms the highest client-advertised EGFX version. It uses AVC420 only
-when that version permits it. Version 8.1 requires `AVC420_ENABLED`. Version 8 and versions with `AVC_DISABLED` use
-the legacy path. The server preserves the client's capability flags. It sends AVC420
-only, even if the selected version also supports AVC444.
+when that version permits it. Version 8.1 requires `AVC420_ENABLED`. Clients without
+AVC420 support use RemoteFX over EGFX, with codec ID `CAVIDEO`. This does not require
+legacy RemoteFX capabilities. Clients without EGFX use legacy RemoteFX or bitmap
+updates. The server preserves the client's capability flags. When AVC is available,
+it sends AVC420 only, even if the selected version also supports AVC444.
 
 On Linux, H.264 first tries VA-API Constrained Baseline on `/dev/dri/renderD128`, using
 8-bit NV12, constant QP 24, I and P pictures, and one reference picture. The driver
@@ -58,7 +60,7 @@ The server allows at most two unacknowledged frames. Cumulative acknowledgements
 release earlier frames. If the client suspends acknowledgements, the bounded capture
 queue and ten-frame-per-second limit pace delivery without retaining frame records.
 A two-second ACK or decode-progress stall, or an encoder error, resets the surface
-and encoder for a new IDR. A second failure falls back to RemoteFX for that connection.
+and encoder for a full refresh. A second failure uses the legacy codec for that connection.
 The connection and input remain active. A closed EGFX channel also uses the legacy
 path. Recovery cannot fix a client that closes the entire RDP connection.
 
@@ -66,9 +68,11 @@ Startup logs `RDP H.264 available` with the encoder name. Each connection logs
 `RDP codec negotiated`, including the codec and reason. Legacy fallback logs use
 `RemoteFX/bitmap`; `RDP legacy codec available` gives the actual legacy codec.
 Connection logs include the peer address and session ID. Enable
-`RUST_LOG=info,wayshare::rdp=debug` for `CapsAdvertise`, `CapsConfirm`, AVC420 frame IDs,
+`RUST_LOG=info,wayshare::rdp=debug` for `CapsAdvertise`, `CapsConfirm`, EGFX frame IDs,
 ACKs and the client's decoded-frame count. FreeRDP can request this path with
-`/gfx:avc420`; use `-gfx /rfx` to test the legacy path.
+`/gfx:avc420`; use `/gfx:RFX` for AVC-disabled EGFX and `-gfx /rfx` for legacy RemoteFX.
+`RDP session summary` records the client and announced sizes, applied output mode,
+codec and reason. Display Control caps and every received PDU appear at debug.
 
 For an isolated loopback test, `WAYSHARE_TEST_RDP_FAIL_AFTER=20` injects one encoder
 failure after 20 AVC420 frames in each connection. Network listeners ignore this
@@ -156,25 +160,29 @@ maps that extent onto the output's logical size, so output scale needs no extra 
 Enable `resize = true` to fit the shared output to the client's requested pixel size.
 RDP uses the same display owner as RFB and restores the original mode on disconnect.
 Only one session can own output mode changes. The output keeps its current scale; mode
-sizes may round down to whole logical pixels. After a successful resize, the session
-uses the applied mode's dimensions for frames and pointer coordinates. If resizing is
-disabled, fails, or another session owns the output, frames scale to the client size.
+sizes may round down to whole logical pixels. Frames scale from the applied mode to
+the requested desktop size. The same fitting also applies when resizing is disabled,
+fails, or another session owns the output.
 
 Display Control supports one primary monitor at the origin. Rotation requests can use
 portrait or landscape dimensions. Width must be even, and both dimensions must be
 between 200 and 8192 pixels, per
 [MS-RDPEDISP](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpedisp/ea2de591-9203-42cd-9908-be7a55237d1c).
-Dynamic layouts must also fit the advertised area of 3840 × 2400 pixels.
-An odd initial desktop width rounds down. A size change reactivates the RDP session
-and rebuilds capture and the encoder before sending frames at the new size.
+Dynamic layouts must also fit the advertised area of 8192 × 8192 pixels.
+The RDP desktop preserves the client's exact initial dimensions, including odd widths
+and heights. When the compositor rounds its mode, captured frames scale to the RDP
+extent. Pointer coordinates use that same extent and clamp to its edges. A Display
+Control resize announces the requested extent and rebuilds capture and the encoder.
+A client that repeats its original size in Confirm Active does not undo that resize.
+After 32 server reactivations, the session keeps its current extent and logs a warning.
 
 Start with 1920x1080 or lower to limit CPU RemoteFX encoding work. The client must send
 a Display Control layout or reconnect with a new desktop size to change the resolution.
 Rotating a device can instead scale or crop the existing framebuffer locally.
 With `RUST_LOG=info,wayshare::rdp=debug`, the server logs client capabilities, static and
 dynamic channel states, completed Display Control caps writes, layout requests and
-pointer extents. The caps allow one monitor with a maximum area of 3840 times 2400
-pixels, not a separate width limit of 3840. Both phone orientations fit that area.
+pointer extents. The caps allow one monitor with a maximum area of 8192 times 8192
+pixels. Each dimension also has an 8192-pixel limit.
 
 Microsoft's current [iOS display settings guide](https://learn.microsoft.com/en-us/windows-app/display-settings#display-settings)
 places resolution under the app-wide Settings > Display, shared across connections.

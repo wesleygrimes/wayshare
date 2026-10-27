@@ -1,4 +1,4 @@
-//! EGFX negotiation and bounded AVC420 delivery. Surface commands and frames share the
+//! EGFX negotiation and bounded frame delivery. Surface commands and frames share the
 //! display queue so a reset or a RemoteFX fallback cannot overtake an encoded picture.
 
 use std::collections::VecDeque;
@@ -29,7 +29,8 @@ const CAPS_TIMEOUT: Duration = Duration::from_secs(3);
 pub enum Mode {
     Waiting,
     Avc420,
-    RemoteFx,
+    EgfxRemoteFx,
+    Legacy,
 }
 
 pub struct Connection {
@@ -61,7 +62,7 @@ impl Connection {
         let mut state = self.state.lock().unwrap();
         let started = *state.started.get_or_insert_with(Instant::now);
         if state.mode == Mode::Waiting && started.elapsed() >= CAPS_TIMEOUT {
-            state.mode = Mode::RemoteFx;
+            state.mode = Mode::Legacy;
             info!(
                 codec = "RemoteFX/bitmap",
                 reason = "client did not negotiate EGFX/AVC420",
@@ -72,7 +73,7 @@ impl Connection {
     }
 
     pub fn fallback(&self, reason: &str) {
-        self.state.lock().unwrap().mode = Mode::RemoteFx;
+        self.state.lock().unwrap().mode = Mode::Legacy;
         info!(codec = "RemoteFX/bitmap", %reason, "RDP codec negotiated");
     }
 }
@@ -158,12 +159,12 @@ impl GraphicsPipelineHandler for Handler {
             state.mode = if supports_avc420(cap) {
                 Mode::Avc420
             } else {
-                Mode::RemoteFx
+                Mode::EgfxRemoteFx
             };
-            if state.mode == Mode::RemoteFx {
+            if state.mode == Mode::EgfxRemoteFx {
                 info!(
-                    codec = "RemoteFX/bitmap",
-                    reason = "client EGFX caps disable AVC420",
+                    codec = "EGFX RemoteFX",
+                    reason = "client EGFX caps disable AVC420; CAVIDEO available",
                     "RDP codec negotiated"
                 );
             }
@@ -178,7 +179,7 @@ impl GraphicsPipelineHandler for Handler {
             .ack(id, depth, decoded, Instant::now());
     }
     fn on_close(&mut self) {
-        self.state.lock().unwrap().mode = Mode::RemoteFx;
+        self.state.lock().unwrap().mode = Mode::Legacy;
         debug!("RDP EGFX channel closed");
     }
 }
@@ -287,9 +288,41 @@ impl Flow {
     }
 }
 
+enum FrameEncoder {
+    Avc420(Encoder),
+    RemoteFx,
+}
+
+impl FrameEncoder {
+    fn new(mode: Mode, size: DesktopSize) -> Result<Self> {
+        match mode {
+            Mode::Avc420 => Ok(Self::Avc420(Encoder::new(size.width, size.height)?)),
+            Mode::EgfxRemoteFx => Ok(Self::RemoteFx),
+            _ => anyhow::bail!("EGFX codec is not ready"),
+        }
+    }
+
+    fn encode(&mut self, frame: &Frame, idr: bool) -> Result<Vec<u8>> {
+        match self {
+            Self::Avc420(encoder) => encoder.encode(frame, idr),
+            Self::RemoteFx => ironrdp_server::encode_remotefx(&super::bitmap(frame)?),
+        }
+    }
+
+    fn description(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Avc420(_) => ("H.264/AVC420", "client EGFX caps support AVC420"),
+            Self::RemoteFx => (
+                "EGFX RemoteFX",
+                "client EGFX caps disable AVC420; CAVIDEO available",
+            ),
+        }
+    }
+}
+
 pub struct Stream {
     connection: Arc<Connection>,
-    encoder: Encoder,
+    encoder: FrameEncoder,
     size: DesktopSize,
     surface: u16,
     first: bool,
@@ -299,11 +332,16 @@ pub struct Stream {
 
 impl Stream {
     pub fn new(connection: Arc<Connection>, size: DesktopSize) -> Result<Self> {
-        let encoder = Encoder::new(size.width, size.height)?;
+        let encoder = FrameEncoder::new(connection.mode(), size)?;
+        let (codec, reason) = encoder.description();
+        let implementation = match &encoder {
+            FrameEncoder::Avc420(encoder) => encoder.name(),
+            FrameEncoder::RemoteFx => "RemoteFX RLGR3 (software)",
+        };
         info!(
-            codec = "H.264/AVC420",
-            encoder = encoder.name(),
-            reason = "client EGFX caps support AVC420",
+            codec,
+            encoder = implementation,
+            reason,
             "RDP codec negotiated"
         );
         let handle = connection
@@ -326,7 +364,8 @@ impl Stream {
             width = size.width,
             height = size.height,
             surface,
-            "RDP EGFX reset; next frame is IDR"
+            codec,
+            "RDP EGFX reset; next frame is a full refresh"
         );
         Ok(Self {
             connection,
@@ -353,7 +392,7 @@ impl Stream {
             Pace::Ready => (),
         }
         let mut idr = self.first || self.frames.is_multiple_of(300);
-        let injected = {
+        let injected = matches!(self.encoder, FrameEncoder::Avc420(_)) && {
             let mut fail_after = self.connection.fail_after.lock().unwrap();
             if *fail_after == Some(self.frames) {
                 fail_after.take();
@@ -399,6 +438,21 @@ impl Stream {
             seconds: ((millis / 1000) % 60) as u8,
             milliseconds: (millis % 1000) as u16,
         };
+        let bytes = data.len();
+        let (codec_id, bitmap_data) = match self.encoder {
+            FrameEncoder::Avc420(_) => (
+                Codec1Type::Avc420,
+                encode_avc420_bitmap_stream(
+                    &[Avc420Region::full_frame(
+                        self.size.width,
+                        self.size.height,
+                        24,
+                    )],
+                    &data,
+                ),
+            ),
+            FrameEncoder::RemoteFx => (Codec1Type::RemoteFx, data),
+        };
         // Keep our own bounded frame tracker: EGFX 0.3 only removes exact ACK ids and
         // retains sent frames indefinitely when ACKs are suspended. ACKs are cumulative.
         for pdu in [
@@ -408,7 +462,7 @@ impl Stream {
             }),
             GfxPdu::WireToSurface1(WireToSurface1Pdu {
                 surface_id: self.surface,
-                codec_id: Codec1Type::Avc420,
+                codec_id,
                 pixel_format: PixelFormat::XRgb,
                 destination_rectangle: ExclusiveRectangle {
                     left: 0,
@@ -416,14 +470,7 @@ impl Stream {
                     right: self.size.width,
                     bottom: self.size.height,
                 },
-                bitmap_data: encode_avc420_bitmap_stream(
-                    &[Avc420Region::full_frame(
-                        self.size.width,
-                        self.size.height,
-                        24,
-                    )],
-                    &data,
-                ),
+                bitmap_data,
             }),
             GfxPdu::EndFrame(EndFramePdu { frame_id: id }),
         ] {
@@ -434,9 +481,10 @@ impl Stream {
         debug!(
             id,
             idr,
-            bytes = data.len(),
+            bytes,
             frame = self.frames,
-            "RDP AVC420 frame sent"
+            codec = self.description().0,
+            "RDP EGFX frame sent"
         );
         wire(channel, messages).map(Some)
     }
@@ -444,10 +492,10 @@ impl Stream {
     pub fn recover(&mut self, reason: &str) -> Result<()> {
         anyhow::ensure!(
             self.connection.state.lock().unwrap().flow.recover(),
-            "H.264 recovery exhausted: {reason}"
+            "EGFX recovery exhausted: {reason}"
         );
-        warn!(%reason, "RDP H.264 recovery: reset surface and encoder for new IDR");
-        self.encoder = Encoder::new(self.size.width, self.size.height)?;
+        warn!(%reason, "RDP EGFX recovery: reset surface and encoder for full refresh");
+        self.encoder = FrameEncoder::new(self.connection.mode(), self.size)?;
         let handle = self
             .connection
             .handle
@@ -466,6 +514,10 @@ impl Stream {
         );
         self.first = true;
         Ok(())
+    }
+
+    pub fn description(&self) -> (&'static str, &'static str) {
+        self.encoder.description()
     }
 
     pub fn needs_frame(&self) -> bool {
@@ -557,6 +609,94 @@ mod tests {
     }
 
     #[test]
+    fn iphone_caps_choose_egfx_remotefx_without_clearing_avc_disabled() {
+        let raw = [
+            (0x00080004, 0x2_u32),
+            (0x00080105, 0x2),
+            (0x000a0002, 0x22),
+            (0x000a0200, 0x22),
+            (0x000a0301, 0x20),
+            (0x000a0400, 0x22),
+            (0x000b0101, 0x1a2),
+            (0x000b0300, 0x1a2),
+        ];
+        let caps = CapabilitiesAdvertisePdu(
+            raw.into_iter()
+                .map(|(version, flags)| {
+                    RawCapabilitySet::new(CapabilityVersion(version), flags.to_le_bytes().to_vec())
+                })
+                .collect(),
+        );
+        let connection = Connection::new(None);
+        let (_, handle) = Factory(connection.clone())
+            .build_server_with_handle()
+            .unwrap();
+        let mut server = handle.lock().unwrap();
+        server.start(7).unwrap();
+        server
+            .process(
+                7,
+                &encode_vec(&GfxPdu::CapabilitiesAdvertise(caps)).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            server.negotiated_capabilities(),
+            Some(&CapabilitySet::V10_4 {
+                flags: CapabilitiesV104Flags::SMALL_CACHE | CapabilitiesV104Flags::AVC_DISABLED,
+            })
+        );
+        assert_eq!(connection.mode(), Mode::EgfxRemoteFx);
+    }
+
+    #[test]
+    fn reset_surface_and_monitor_use_exact_odd_dimensions() {
+        for (width, height) in [
+            (836, 1580),
+            (1580, 797),
+            (1579, 797),
+            (2868, 1320),
+            (1320, 2868),
+        ] {
+            let connection = Connection::new(None);
+            let (_, handle) = Factory(connection.clone())
+                .build_server_with_handle()
+                .unwrap();
+            let mut server = handle.lock().unwrap();
+            server.start(7).unwrap();
+            server
+                .process(
+                    7,
+                    &encode_vec(&GfxPdu::CapabilitiesAdvertise(
+                        CapabilitiesAdvertisePdu::from_typed(&[CapabilitySet::V10_4 {
+                            flags: CapabilitiesV104Flags::AVC_DISABLED,
+                        }]),
+                    ))
+                    .unwrap(),
+                )
+                .unwrap();
+            server.drain_output();
+            let size = DesktopSize { width, height };
+            reset(&mut server, size);
+            server.create_surface(width, height).unwrap();
+            let mut pdus = Vec::new();
+            for msg in server.drain_output() {
+                let bytes = encode_vec(&*msg).unwrap();
+                let mut raw = Vec::new();
+                ironrdp_graphics::zgfx::Decompressor::new()
+                    .decompress(&bytes, &mut raw)
+                    .unwrap();
+                pdus.push(ironrdp_core::decode::<GfxPdu>(&raw).unwrap());
+            }
+            assert!(pdus.iter().any(|p| matches!(p, GfxPdu::ResetGraphics(p)
+                if p.width == u32::from(width) && p.height == u32::from(height)
+                && p.monitors.len() == 1 && p.monitors[0].right == i32::from(width) - 1
+                && p.monitors[0].bottom == i32::from(height) - 1)));
+            assert!(pdus.iter().any(|p| matches!(p, GfxPdu::CreateSurface(p)
+                if p.width == width && p.height == height)));
+        }
+    }
+
+    #[test]
     fn negotiation_preserves_disabled_flags_in_every_version() {
         for cap in [
             CapabilitySet::V8 {
@@ -592,7 +732,7 @@ mod tests {
         ] {
             let (confirmed, mode) = negotiate(std::slice::from_ref(&cap));
             assert_eq!(confirmed, cap);
-            assert_eq!(mode, Mode::RemoteFx);
+            assert_eq!(mode, Mode::EgfxRemoteFx);
         }
     }
 
@@ -619,7 +759,7 @@ mod tests {
                 flags: CapabilitiesV10Flags::AVC_DISABLED
             }
         );
-        assert_eq!(mode, Mode::RemoteFx);
+        assert_eq!(mode, Mode::EgfxRemoteFx);
         assert_eq!(
             negotiate(&[CapabilitySet::V10_1]),
             (CapabilitySet::V10_1, Mode::Avc420)
@@ -630,15 +770,15 @@ mod tests {
     fn absent_egfx_and_explicit_fallback_are_permanent_for_the_session() {
         let connection = Connection::new(None);
         connection.state.lock().unwrap().started = Some(Instant::now() - CAPS_TIMEOUT);
-        assert_eq!(connection.mode(), Mode::RemoteFx);
+        assert_eq!(connection.mode(), Mode::Legacy);
         let mut handler = Handler {
             state: connection.state.clone(),
             preferred: vec![],
         };
         handler.on_ready(&CapabilitySet::V10_1);
-        assert_eq!(connection.mode(), Mode::RemoteFx);
+        assert_eq!(connection.mode(), Mode::Legacy);
         connection.fallback("encoder unavailable");
-        assert_eq!(connection.mode(), Mode::RemoteFx);
+        assert_eq!(connection.mode(), Mode::Legacy);
     }
 
     #[test]

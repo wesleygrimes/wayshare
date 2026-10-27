@@ -501,18 +501,18 @@ fn capture(
                     std::thread::sleep(Duration::from_millis(10));
                     continue;
                 }
-                gfx::Mode::Avc420 if stream.is_none() => {
+                gfx::Mode::Avc420 | gfx::Mode::EgfxRemoteFx if stream.is_none() => {
                     match gfx::Stream::new(connection.clone(), size) {
                         Ok(new) => {
                             stream = Some(new);
                             dirty = true;
                         }
                         Err(error) => {
-                            connection.fallback(&format!("H.264 initialization failed: {error:#}"))
+                            connection.fallback(&format!("EGFX initialization failed: {error:#}"))
                         }
                     }
                 }
-                gfx::Mode::RemoteFx if stream.is_some() => {
+                gfx::Mode::Legacy if stream.is_some() => {
                     connection.fallback("EGFX channel closed");
                     // A closed DVC can no longer carry DeleteSurface; reactivate legacy graphics.
                     stream = None;
@@ -535,8 +535,8 @@ fn capture(
             };
             if first {
                 debug!(frame = ?(frame.width, frame.height), ?size, "RDP first frame size");
-                let (codec, reason) = if stream.is_some() {
-                    ("H.264/AVC420", "client EGFX caps support AVC420")
+                let (codec, reason) = if let Some(stream) = &stream {
+                    stream.description()
                 } else {
                     (
                         summary.legacy_codec,
@@ -556,7 +556,7 @@ fn capture(
                     Err(error) => {
                         gfx.as_ref()
                             .unwrap()
-                            .fallback(&format!("H.264 failed: {error:#}"));
+                            .fallback(&format!("EGFX failed: {error:#}"));
                         if let Ok(messages) = active.retire() {
                             let _ = sender.blocking_send(Ok(DisplayUpdate::Egfx(messages)));
                         }

@@ -22,6 +22,8 @@ mod helper;
 mod server;
 mod sound;
 
+#[cfg(feature = "egfx")]
+pub use encoder::encode_remotefx;
 pub use clipboard::CliprdrServerFactory;
 pub use display::{
     BitmapUpdate, ColorPointer, DesktopSize, DisplayUpdate, Framebuffer, PixelFormat, RGBAPointer, RdpServerDisplay,

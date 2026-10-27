@@ -777,3 +777,21 @@ fn set_surface(bitmap: &BitmapUpdate, codec_id: u8, data: &[u8]) -> Result<Updat
     let cmd = SurfaceCommand::SetSurfaceBits(pdu);
     Ok(UpdateFragmenter::new(UpdateCode::SurfaceCommands, encode_vec(&cmd)?))
 }
+
+/// Encode a complete RemoteFX stream for EGFX CAVIDEO, including its channel headers.
+#[cfg(feature = "egfx")]
+pub fn encode_remotefx(bitmap: &BitmapUpdate) -> Result<Vec<u8>> {
+    let mut encoder = RfxEncoder::new(EntropyBits::Rlgr3);
+    let size = DesktopSize { width: bitmap.width.get(), height: bitmap.height.get() };
+    let mut buffer = vec![0; bitmap.data.len().max(65536)];
+    loop {
+        match encoder.encode(bitmap, &mut buffer, Some(size)) {
+            Ok(len) => { buffer.truncate(len); return Ok(buffer); }
+            Err(error) if matches!(error.kind(), ironrdp_core::EncodeErrorKind::NotEnoughBytes { .. })
+                && buffer.len() < bitmap.data.len().saturating_mul(8).max(65536) => {
+                buffer.resize(buffer.len() * 2, 0);
+            }
+            Err(error) => return Err(error).context("EGFX RemoteFX encode error"),
+        }
+    }
+}
