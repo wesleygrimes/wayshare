@@ -13,7 +13,8 @@ Local changes:
   buttons, horizontal wheel deltas and the Pause scancode prefix.
 - Notify the display handler of the negotiated size even without client resize support,
   and process queued input after the display extent is set.
-- Log negotiated static channels and their state under the application RDP debug target.
+- Log negotiated static channels, client capabilities and channel responses under the
+  application RDP debug target. Log Display Control caps only after the write succeeds.
 - Use project punctuation in imported comments.
 - Add `zeroize` and use a local package manifest without the upstream lint configuration.
 

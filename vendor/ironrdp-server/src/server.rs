@@ -44,6 +44,15 @@ use crate::gfx::{EgfxServerMessage, GfxServerFactory};
 use crate::handler::RdpServerInputHandler;
 use crate::{SoundServerFactory, builder, capabilities};
 
+fn display_control_opened(channel: &ironrdp_svc::StaticVirtualChannel) -> bool {
+    channel
+        .channel_processor_downcast_ref::<dvc::DrdynvcServer>()
+        .is_some_and(|dvc| {
+            dvc.get_channel_id_by_type::<DisplayControlServer>()
+                .is_some_and(|id| dvc.is_channel_opened(id))
+        })
+}
+
 /// TCP listen backlog size for the RDP server socket.
 const LISTENER_BACKLOG: u32 = 1024;
 
@@ -1399,6 +1408,7 @@ impl RdpServer {
         let mut update_codecs = UpdateEncoderCodecs::new();
         let mut surface_flags = CmdFlags::empty();
         for c in result.capabilities {
+            debug!(target: "wayshare::rdp", capability = ?c, reactivation = result.reactivation, "RDP client capability");
             match c {
                 CapabilitySet::General(c) => {
                     let fastpath = c.extra_flags.contains(GeneralExtraFlags::FASTPATH_OUTPUT_SUPPORTED);
@@ -1679,10 +1689,17 @@ impl RdpServer {
                 }
 
                 if let Some(svc) = self.static_channels.get_by_channel_id_mut(data.channel_id) {
+                    let was_opened = display_control_opened(svc);
                     let response_pdus = svc.process(&data.user_data)?;
-                    debug!(target: "wayshare::rdp", channel_id = data.channel_id, ?svc, "RDP static channel processed");
+                    let caps_generated = !was_opened && display_control_opened(svc) && !response_pdus.is_empty();
                     let response = server_encode_svc_messages(response_pdus, data.channel_id, user_channel_id)?;
                     writer.write_all(&response).await?;
+                    // DisplayControlServer::start generates caps on the successful DVC create response.
+                    // Log after writing, so an open channel alone is not mistaken for sent caps.
+                    if caps_generated {
+                        debug!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), "RDP Display Control caps sent");
+                    }
+                    debug!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), ?svc, "RDP static channel processed");
                 } else {
                     warn!(channel_id = data.channel_id, "Unexpected channel received: ID",);
                 }

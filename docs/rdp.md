@@ -121,9 +121,22 @@ Dynamic layouts must also fit the advertised area of 3840 × 2400 pixels.
 An odd initial desktop width rounds down. A size change reactivates the RDP session
 and rebuilds capture and the encoder before sending frames at the new size.
 
-Start with 1920x1080 or lower to limit CPU RemoteFX encoding work. Enable dynamic
-resolution in the client to send size changes while connected. In Windows App, see
-Microsoft's [display settings guide](https://learn.microsoft.com/en-us/windows-app/display-settings).
+Start with 1920x1080 or lower to limit CPU RemoteFX encoding work. The client must send
+a Display Control layout or reconnect with a new desktop size to change the resolution.
+Rotating a device can instead scale or crop the existing framebuffer locally.
+With `RUST_LOG=info,wayshare::rdp=debug`, the server logs client capabilities, static and
+dynamic channel states, completed Display Control caps writes, layout requests and
+pointer extents. The caps allow one monitor with a maximum area of 3840 times 2400
+pixels, not a separate width limit of 3840. Both phone orientations fit that area.
+
+Microsoft's current [iOS display settings guide](https://learn.microsoft.com/en-us/windows-app/display-settings#display-settings)
+places resolution under the app-wide Settings > Display, shared across connections.
+On iPhone, enable Use Home Indicator Area to use the area reserved for the home indicator.
+On iPad, the corresponding setting is Use Full Display. The guide describes default
+letterboxing to protect rounded corners and system gestures. Per-PC display overrides,
+Match device and a dynamic-resolution toggle are unconfirmed on iOS. The guide documents
+similar controls on other platforms; their names and availability must not be assumed
+on iPhone. Try reconnecting after selecting a resolution, then test rotation both ways.
 
 Clipboard, sound and hardware RDP video encoding remain unsupported.
 Microsoft clients on Windows, iOS, Android and macOS need separate interoperability tests.
