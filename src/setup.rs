@@ -454,6 +454,8 @@ struct UfwRule<'a> {
     proto: &'a str,
     port: &'a str,
     dst: &'a str,
+    src_port: &'a str,
+    src: &'a str,
     direction: &'a str,
 }
 
@@ -472,6 +474,8 @@ impl<'a> UfwRule<'a> {
             proto: f[1],
             port: f[2],
             dst: f[3],
+            src_port: f[4],
+            src: f[5],
             direction: f[f.len() - 1],
         })
     }
@@ -485,14 +489,40 @@ impl<'a> UfwRule<'a> {
             && self.direction.starts_with("in")
             && (listen.ip().is_unspecified() || ufw_net_contains(self.dst, listen.ip()))
     }
+
+    /// Whether the rule covers every inbound TCP connection to `listen`: any source and
+    /// source port, every interface, and a destination that includes the listener's address.
+    fn covers(&self, listen: SocketAddr) -> bool {
+        let dst_covers = if listen.ip().is_unspecified() {
+            ufw_net_is_any(self.dst)
+        } else {
+            ufw_net_contains(self.dst, listen.ip())
+        };
+        self.reaches(listen)
+            && self.direction == "in"
+            && self.src_port == "any"
+            && ufw_net_is_any(self.src)
+            && dst_covers
+    }
 }
 
-/// Looks for a ufw allow rule that reaches `listen`. `limit` rules accept too.
+/// Looks for a ufw allow rule that reaches `listen`. `limit` rules accept too. ufw applies
+/// the first matching rule, so a `deny` or `reject` that covers every connection to
+/// `listen` hides any allow after it. A narrower deny, such as one for a single source,
+/// leaves the later allow in effect for other clients.
 fn ufw_allows(rules: &str, listen: SocketAddr) -> bool {
-    rules
-        .lines()
-        .filter_map(UfwRule::parse)
-        .any(|r| matches!(r.action, "allow" | "limit") && r.reaches(listen))
+    for rule in rules.lines().filter_map(UfwRule::parse) {
+        match rule.action {
+            "allow" | "limit" if rule.reaches(listen) => return true,
+            "deny" | "reject" if rule.covers(listen) => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
+fn ufw_net_is_any(field: &str) -> bool {
+    matches!(field, "any" | "0.0.0.0/0" | "::/0")
 }
 
 /// Matches a ufw address field: `any`, an address, or an address with a prefix length.
@@ -737,5 +767,40 @@ mod tests {
         let v6_host = "### tuple ### allow tcp 3389 fd00::5 any ::/0 in\n";
         assert!(ufw_allows(v6_host, to("[fd00::5]:3389")));
         assert!(!ufw_allows(v6_host, to("[fd00::6]:3389")));
+    }
+
+    #[test]
+    fn applies_ufw_rules_in_order() {
+        let any = "allow any any 0.0.0.0/0 any 192.168.1.0/24 in";
+        let check = |first: &str, listen: &str| {
+            let rules = format!("### tuple ### {first}\n### tuple ### {any}\n");
+            ufw_allows(&rules, listen.parse().unwrap())
+        };
+        for deny in [
+            "deny tcp 3389 0.0.0.0/0 any 0.0.0.0/0 in",
+            "reject tcp 3389 0.0.0.0/0 any 0.0.0.0/0 in",
+            "deny_log any 3380:3390 0.0.0.0/0 any 0.0.0.0/0 in",
+        ] {
+            assert!(!check(deny, "0.0.0.0:3389"), "{deny}");
+            assert!(!check(deny, "192.168.1.50:3389"), "{deny}");
+        }
+        let deny_host = "deny tcp 3389 192.168.1.50 any 0.0.0.0/0 in";
+        assert!(!check(deny_host, "192.168.1.50:3389"));
+        for partial in [
+            "deny tcp 3389 0.0.0.0/0 any 192.168.1.7 in",
+            "deny tcp 3389 0.0.0.0/0 any 0.0.0.0/0 in_eth1",
+            "deny tcp 3389 0.0.0.0/0 1024 0.0.0.0/0 in",
+            "deny udp 3389 0.0.0.0/0 any 0.0.0.0/0 in",
+            "deny tcp 5900 0.0.0.0/0 any 0.0.0.0/0 in",
+            "deny tcp 3389 0.0.0.0/0 any 0.0.0.0/0 out",
+        ] {
+            assert!(check(partial, "0.0.0.0:3389"), "{partial}");
+        }
+        assert!(check(deny_host, "0.0.0.0:3389"));
+        assert!(check(deny_host, "192.168.1.60:3389"));
+        let allow_first = format!(
+            "### tuple ### {any}\n### tuple ### deny tcp 3389 0.0.0.0/0 any 0.0.0.0/0 in\n"
+        );
+        assert!(ufw_allows(&allow_first, "0.0.0.0:3389".parse().unwrap()));
     }
 }
