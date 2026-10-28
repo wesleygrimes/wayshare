@@ -6,8 +6,10 @@ drm_driver() {
   local device driver
   device=$(readlink -f "/sys/class/drm/$(basename "$1")/device")
   driver=$(basename "$(readlink -f "$device/driver")")
-  # VGEM uses a faux device on recent kernels, without a driver symlink.
-  if [[ $(basename "$device") == vgem ]]; then driver=vgem; fi
+  # These modules use faux devices on recent kernels, without driver symlinks.
+  case $(basename "$device") in
+    vkms|vgem) driver=$(basename "$device") ;;
+  esac
   printf '%s\n' "$driver"
 }
 
@@ -31,6 +33,7 @@ if [[ ${1:-} != --session ]]; then
   pacman -Q > /artifacts/versions.log
   seat_env=()
   if [[ ${WAYSHARE_SOFTWARE_DRM:-false} == true ]]; then
+    chmod 755 /dev/dri
     drm_cards=()
     for node in /dev/dri/*; do
       driver=$(drm_driver "$node")
@@ -43,7 +46,7 @@ if [[ ${1:-} != --session ]]; then
         if [[ $driver == vgem ]]; then drm_cards=("$node" "${drm_cards[@]}"); else drm_cards+=("$node"); fi
       fi
     done
-    ls -l /dev/dri > /artifacts/devices.log
+    ls -ld /dev/dri /dev/dri/* > /artifacts/devices.log
     SEATD_VTBOUND=0 seatd -u smoke > /artifacts/seatd.log 2>&1 &
     for _ in {1..50}; do [[ -S /run/seatd.sock ]] && break; sleep 0.1; done
     drm_list=$(IFS=:; echo "${drm_cards[*]}")
