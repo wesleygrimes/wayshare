@@ -54,12 +54,17 @@ install them. Setup lists any missing Linux system packages but never uses sudo.
 | `mise run check:commits <base>` | check that commits in `<base>..HEAD` are Conventional Commits |
 | `mise run build` | dev build; add `--release` for the optimized, locked build |
 | `mise run audit` | cargo-deny for default and all features: advisories, licenses, sources |
-| `mise run licenses` | generate `THIRD-PARTY-LICENSES` for both Linux release targets |
+| `mise run licenses` | regenerate `THIRD-PARTY-LICENSES` for both Linux targets, then commit it |
+| `mise run licenses:check` | fail if `THIRD-PARTY-LICENSES` needs regeneration |
 | `mise run changelog` | preview unreleased notes on stdout; writes nothing |
 | `mise run release <version> [--dry-run] [--tag]` | prepare a release PR, or tag it; see [releasing.md](releasing.md) |
 | `mise run gen-vaapi-sys` | regenerate the libva bindings (Linux) |
 
 `mise run build` uses the dev profile. Pass `--release` for an optimized build.
+
+After dependency updates, run `mise run licenses` and commit `THIRD-PARTY-LICENSES`.
+Generation needs network to fetch license texts from pinned upstream commits.
+Both license tasks fail on warnings or lookup errors. CI runs `licenses:check`.
 
 `audit` downloads the advisory database, so it needs network. `gen-vaapi-sys` needs libva
 headers and clang. Normal checks do not need a live Hyprland session.
