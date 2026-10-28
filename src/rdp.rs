@@ -95,6 +95,8 @@ async fn serve_local(
                 let (stream, peer) = accepted?;
                 // Bound unauthenticated handshakes and credential workers as well as sessions.
                 if sessions.len() >= 8 { drop(stream); continue; }
+                // Without address-based replacement, keepalive is what reaps a vanished viewer.
+                crate::rfb::session::set_keepalive(&stream);
                 let flow = Arc::new(transport::Output::default());
                 let socket = match transport::socket_monitor(&stream) {
                     Ok(socket) => socket,
