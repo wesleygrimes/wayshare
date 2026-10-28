@@ -5,11 +5,27 @@ edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.89"
 
+[features]
+default = ["rdp"]
+rdp = ["dep:ironrdp-server", "dep:async-trait", "dep:rcgen", "dep:zeroize", "dep:ironrdp-pdu", "dep:ironrdp-displaycontrol", "dep:ironrdp-egfx", "dep:ironrdp-dvc", "dep:ironrdp-svc", "dep:openh264", "dep:ironrdp-core", "dep:ironrdp-graphics"]
+
 [[bench]]
 name = "media"
 harness = false
 
 [dependencies]
+ironrdp-core = { version = "=0.2.1", optional = true }
+ironrdp-graphics = { version = "=0.9.0", optional = true }
+ironrdp-egfx = { version = "=0.3.0", default-features = false, optional = true }
+ironrdp-dvc = { version = "=0.8.0", optional = true }
+ironrdp-svc = { version = "=0.8.0", optional = true }
+openh264 = { version = "=0.9.3", optional = true }
+ironrdp-displaycontrol = { version = "=0.8.0", optional = true }
+ironrdp-pdu = { version = "=0.9.0", default-features = false, features = ["std"], optional = true }
+zeroize = { version = "1.9", optional = true }
+async-trait = { version = "=0.1.92", optional = true }
+ironrdp-server = { version = "=0.13.0", path = "vendor/ironrdp-server", default-features = false, features = ["egfx"], optional = true }
+rcgen = { version = "=0.14.10", optional = true }
 aes = "0.9.3"
 anyhow = "1.0.104"
 bytes = "1.12.1"
@@ -49,3 +65,7 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 [profile.release]
 strip = true
+
+[patch.crates-io]
+ironrdp-acceptor = { path = "vendor/ironrdp-acceptor" }
+ironrdp-dvc = { path = "vendor/ironrdp-dvc" }

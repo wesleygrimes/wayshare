@@ -4,7 +4,8 @@
 cargo test
 ```
 
-Tests run on Linux and macOS. Capture, input and encoding only build on Linux.
+Tests run on Linux and macOS. Capture, input and encoding only work on Linux.
+Default builds include RDP; `cargo build --locked --no-default-features` omits it.
 
 ## Build prerequisites
 
@@ -15,7 +16,10 @@ Rust 1.89 or newer ([rustup](https://rustup.rs) or your distro's package), a C l
 |---|---|
 | Arch | `base-devel mesa libglvnd` |
 | Debian, Ubuntu | `build-essential pkg-config libegl-dev libgbm-dev` |
-| Fedora | `gcc pkgconf-pkg-config libglvnd-devel mesa-libgbm-devel` |
+| Fedora | `gcc gcc-c++ pkgconf-pkg-config libglvnd-devel mesa-libgbm-devel` |
+
+Default builds also need a C++ compiler for the OpenH264 software fallback.
+`--no-default-features` omits RDP and OpenH264.
 
 ## Installing from source
 
@@ -42,9 +46,10 @@ missing Linux system packages but never uses sudo.
 | `mise run test` | `cargo test --locked` |
 | `mise run bench:media` | benchmark HEVC packetization and SRTP encryption; no GPU needed |
 | `mise run check` | `fmt:check`, `lint` and `test`; rewrites nothing |
+| `mise run check:no-rdp` | clippy and tests with `--no-default-features` |
 | `mise run check:commits <base>` | check that commits in `<base>..HEAD` are Conventional Commits |
 | `mise run build` | dev build; add `--release` for the optimized, locked build |
-| `mise run audit` | cargo-deny: advisories, licenses, sources |
+| `mise run audit` | cargo-deny for default and all features: advisories, licenses, sources |
 | `mise run changelog` | preview unreleased notes on stdout; writes nothing |
 | `mise run release <version> [--dry-run] [--tag]` | prepare a release PR, or tag it; see [releasing.md](releasing.md) |
 | `mise run gen-vaapi-sys` | regenerate the libva bindings (Linux) |

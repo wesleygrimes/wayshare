@@ -63,7 +63,13 @@ Choose a password, the monitor to share, and the network to accept connections o
 Setup saves your choices, starts wayshare, and displays the address and username for
 your Mac.
 
-If ufw blocks the connection, setup offers to add a firewall rule using sudo.
+Default builds also accept [RDP](docs/rdp.md) on all IPv4 interfaces at TCP 3389,
+using TLS and the same username and password. Set `[rdp] enabled = false` to turn
+it off, or build with `--no-default-features` to omit it. The network choice in
+setup controls Apple RFB; configure `rdp.listen` separately to restrict RDP.
+
+If ufw blocks a connection, setup offers rules for TCP 5900 and the enabled RDP
+port using sudo. Existing setups must rerun setup or allow TCP 3389 themselves.
 
 Run `wayshare setup` again to change these choices. For
 [other settings](docs/configuration.md), edit `~/.config/wayshare/config.toml`, then run:

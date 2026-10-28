@@ -1,3 +1,8 @@
+use std::sync::Arc;
+
+pub type FrameSourceFactory = Arc<dyn Fn() -> anyhow::Result<Box<dyn FrameSource>> + Send + Sync>;
+pub type CursorSourceFactory = Arc<dyn Fn() -> Box<dyn CursorSource> + Send + Sync>;
+
 /// Pixels are `0x00RRGGBB`, row-major, `width * height` long.
 pub struct Frame {
     pub width: u16,

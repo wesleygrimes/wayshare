@@ -251,6 +251,21 @@ fn keymap_fd(text: &str) -> Result<OwnedFd> {
 }
 
 impl InputSink for WaylandInput {
+    fn physical_key(&mut self, down: bool, code: u32) -> Result<()> {
+        let actions = self.kb.physical_key(down, code);
+        self.run_kb(actions)
+    }
+
+    fn wheel(&mut self, x: i32, y: i32) -> Result<()> {
+        let actions = self.ptr.wheel(x, y);
+        self.run_ptr(actions)
+    }
+
+    fn extra_button(&mut self, button: u8, down: bool) -> Result<()> {
+        let actions = self.ptr.extra_button(button, down);
+        self.run_ptr(actions)
+    }
+
     fn key(&mut self, down: bool, keysym: u32, mac_keycode: Option<u16>) -> Result<()> {
         let a = self.kb.key(down, keysym, mac_keycode);
         if a.is_empty() {

@@ -1,0 +1,54 @@
+[package]
+edition = "2024"
+rust-version = "1.89"
+name = "ironrdp-dvc"
+version = "0.8.0"
+authors = [
+    "Devolutions Inc. <infos@devolutions.net>",
+    "Teleport <goteleport.com>",
+]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "DRDYNVC static channel implementation and traits to implement dynamic virtual channels"
+homepage = "https://github.com/Devolutions/IronRDP"
+readme = "README.md"
+keywords = [
+    "rdp",
+    "remote-desktop",
+    "network",
+    "client",
+    "protocol",
+]
+categories = ["network-programming"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Devolutions/IronRDP"
+resolver = "2"
+
+[features]
+default = []
+std = []
+
+[lib]
+name = "ironrdp_dvc"
+path = "src/lib.rs"
+test = true
+doctest = true
+
+[dependencies.ironrdp-core]
+version = "0.2"
+features = ["alloc"]
+
+[dependencies.ironrdp-pdu]
+version = "0.9"
+features = ["alloc"]
+
+[dependencies.ironrdp-svc]
+version = "0.8"
+
+[dependencies.tracing]
+version = "0.1"
+features = ["log"]

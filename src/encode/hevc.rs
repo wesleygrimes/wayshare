@@ -65,6 +65,16 @@ impl BitWriter {
         }
     }
 
+    pub fn bit_len(&self) -> u32 {
+        self.nbits
+    }
+
+    pub fn pad_zero(&mut self) {
+        while !self.nbits.is_multiple_of(8) {
+            self.u(1, 0);
+        }
+    }
+
     pub fn into_bytes(self) -> Vec<u8> {
         assert!(self.nbits.is_multiple_of(8), "unaligned RBSP");
         self.bytes

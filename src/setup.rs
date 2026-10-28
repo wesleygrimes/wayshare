@@ -80,6 +80,13 @@ pub fn run() -> Result<()> {
     let bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == listen.ip());
     let ip = bound.map(|a| a.ip).or_else(lan_ipv4);
     firewall_step(listen.port(), bound, ip, &addrs)?;
+    if settings.rdp.enabled && !settings.rdp.listen.ip().is_loopback() {
+        let rdp_bound = addrs
+            .iter()
+            .find(|a| IpAddr::V4(a.ip) == settings.rdp.listen.ip());
+        let rdp_ip = rdp_bound.map(|a| a.ip).or_else(lan_ipv4);
+        firewall_step(settings.rdp.listen.port(), rdp_bound, rdp_ip, &addrs)?;
+    }
 
     let name = settings.name.clone().unwrap_or_else(hostname);
     let address = match (ip, listen.port()) {
@@ -121,7 +128,7 @@ fn firewall_step(
     };
     let rule = ufw_rule(port, bound, lan_ip, addrs);
     let command = format!("sudo ufw {}", rule.join(" "));
-    let add = Confirm::new("Add a firewall rule for your Mac?")
+    let add = Confirm::new(format!("Allow TCP {port} through the firewall?"))
         .description(&format!(
             "{why} Runs `{command}`; sudo asks for your password."
         ))
@@ -130,7 +137,7 @@ fn firewall_step(
         .theme(crate::ui::theme())
         .run()?;
     if !add {
-        ui::warn("Firewall", "skipped; the Mac may not be able to connect");
+        ui::warn("Firewall", "skipped; clients may not be able to connect");
         ui::hint(&command);
         return Ok(());
     }

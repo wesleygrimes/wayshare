@@ -2,9 +2,12 @@
 
 wayshare is meant for your home or office network. To reach your machine from anywhere
 else, connect over [Tailscale](https://tailscale.com) or another VPN. Don't forward port
-5900 on your router to the internet.
+5900 or 3389 on your router to the internet.
 
 ## What's encrypted
+
+Apple Screen Sharing uses the encryption below. RDP encrypts credentials, input and
+screen updates with TLS. Check its certificate fingerprint before sending a password.
 
 | Traffic | Encrypted |
 |---|---|
@@ -25,7 +28,9 @@ password or any other important one.
 
 ## Only accept connections over Tailscale
 
-Run `wayshare setup` and pick `tailscale0` as the network. wayshare then refuses connections from your local network and only answers over Tailscale.
+Run `wayshare setup` and pick `tailscale0` as the network for Apple RFB. Also set
+`[rdp] listen = "100.x.y.z:3389"` to your Tailscale address, or set
+`[rdp] enabled = false`. RDP defaults to all IPv4 interfaces independently of RFB.
 Tailscale has to be up before wayshare starts. If it isn't, wayshare can't listen on the
 address and the service fails; run `wayshare restart` once Tailscale is up.
 
@@ -34,8 +39,12 @@ address and the service fails; run `wayshare restart` once Tailscale is up.
 | Port | Needed | Why |
 |---|---|---|
 | TCP 5900 | yes | the Screen Sharing connection |
+| TCP 3389 | when RDP is enabled, the default | TLS RDP with the shared SRP credentials |
 | UDP 5353 | optional | mDNS, so the machine shows up in Finder's sidebar |
 | UDP 5960, 5962 | no | High Performance video and audio. wayshare sends first, so replies come back through connection tracking |
 
-`wayshare setup` offers to open TCP 5900 in ufw. With another firewall, open it yourself,
-and only to your local network or VPN.
+`wayshare setup` offers to open TCP 5900 and the enabled RDP port in ufw, normally
+TCP 3389. Existing setups must rerun setup or add the RDP rule themselves. With
+another firewall, open the ports yourself, only to your local network or VPN.
+RDP stays off if its SRP record or TLS identity is unavailable. Apple RFB keeps
+listening and still requires credentials.

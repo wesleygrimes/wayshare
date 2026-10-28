@@ -57,6 +57,7 @@ pub enum KbAction {
 enum KeyId {
     Sym(u32),
     Kvk(u16),
+    Evdev(u32),
 }
 
 struct Slot {
@@ -119,6 +120,16 @@ impl KeyboardEngine {
         };
         if down {
             self.press(id, keysym)
+        } else {
+            self.release(id)
+        }
+    }
+
+    /// Physical PC keys bypass the Mac modifier mapping and keysym shift correction.
+    pub fn physical_key(&mut self, down: bool, code: u32) -> Vec<KbAction> {
+        let id = KeyId::Evdev(code);
+        if down {
+            self.press(id, 0)
         } else {
             self.release(id)
         }
@@ -207,6 +218,9 @@ impl KeyboardEngine {
         keysym: u32,
         out: &mut Vec<KbAction>,
     ) -> Option<(u32, Option<bool>)> {
+        if let KeyId::Evdev(code) = id {
+            return Some((code, None));
+        }
         if let KeyId::Kvk(k) = id {
             if let Some(m) = kvk::modifier(k) {
                 return Some((self.modifier_code(m), None));
@@ -216,6 +230,12 @@ impl KeyboardEngine {
         if let Some(m) = keysym::modifier(keysym) {
             return Some((self.modifier_code(m), None));
         }
+        // Shortcuts name physical keys. Keep held modifiers, including Shift,
+        // rather than correcting them as though this were plain text entry.
+        let shortcut = self.depressed() & (MOD_SUPER | MOD_CTRL | MOD_ALT) != 0;
+        if shortcut && keysym == u32::from(' ') {
+            return Some((KEY_SPACE, None));
+        }
         if let Some(c) = keysym::fixed(keysym) {
             return Some((c, None));
         }
@@ -223,7 +243,7 @@ impl KeyboardEngine {
             && self.cfg.variant.is_empty()
             && let Some((c, shift)) = keysym::us(keysym)
         {
-            return Some((c, Some(shift)));
+            return Some((c, if shortcut { None } else { Some(shift) }));
         }
         self.slot_for(keysym, out).map(|c| (c, None))
     }
@@ -466,6 +486,94 @@ mod tests {
                 code: KEY_A,
                 down: false
             }]
+        );
+    }
+
+    #[test]
+    fn unicode_space_shortcut_uses_the_physical_key_on_each_layout() {
+        for layout in ["us", "de", "fr"] {
+            for modifier in [
+                KEY_LEFTMETA,
+                KEY_RIGHTMETA,
+                KEY_LEFTCTRL,
+                KEY_RIGHTCTRL,
+                KEY_LEFTALT,
+                KEY_RIGHTALT,
+            ] {
+                let mut e = KeyboardEngine::new(KeyboardConfig {
+                    layout: layout.into(),
+                    ..Default::default()
+                });
+                e.physical_key(true, modifier);
+                let held = e.depressed();
+                assert_eq!(
+                    e.key(true, ' ' as u32, None),
+                    vec![Key {
+                        code: KEY_SPACE,
+                        down: true
+                    }]
+                );
+                // The modifier may be released before the Unicode key-up.
+                e.physical_key(false, modifier);
+                assert_eq!(
+                    e.key(false, ' ' as u32, None),
+                    vec![Key {
+                        code: KEY_SPACE,
+                        down: false
+                    }]
+                );
+                assert_ne!(held, 0);
+                assert_eq!(e.depressed(), 0);
+                assert!(e.refs.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn printable_us_shortcuts_preserve_all_held_modifiers() {
+        for sym in 0x20..0x7f {
+            for shifted in [false, true] {
+                let mut e = eng();
+                e.physical_key(true, KEY_LEFTMETA);
+                e.physical_key(true, KEY_LEFTCTRL);
+                e.physical_key(true, KEY_LEFTALT);
+                if shifted {
+                    e.physical_key(true, KEY_LEFTSHIFT);
+                }
+                let before = e.depressed();
+                let (code, _) = keysym::us(sym).unwrap();
+                assert_eq!(e.key(true, sym, None), vec![Key { code, down: true }]);
+                assert_eq!(e.key(false, sym, None), vec![Key { code, down: false }]);
+                assert_eq!(e.depressed(), before);
+            }
+        }
+    }
+
+    #[test]
+    fn plain_unicode_typing_keeps_layout_slots_and_shift_correction() {
+        let mut e = KeyboardEngine::new(KeyboardConfig {
+            layout: "de".into(),
+            ..Default::default()
+        });
+        let actions = e.key(true, ' ' as u32, None);
+        assert!(actions.iter().any(|a| matches!(a, KbAction::Keymap(_))));
+        assert_eq!(keys(&actions), vec![(SLOT_CODES[0], true)]);
+        let mut e = eng();
+        e.physical_key(true, KEY_LEFTSHIFT);
+        let actions = e.key(true, 'a' as u32, None);
+        assert_eq!(
+            actions[0],
+            Modifiers {
+                depressed: 0,
+                locked: 0
+            }
+        );
+        assert_eq!(
+            actions.last(),
+            Some(&Modifiers {
+                depressed: MOD_SHIFT,
+                locked: 0
+            })
         );
     }
 

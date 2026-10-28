@@ -23,9 +23,42 @@ pub struct Settings {
     /// Disable other outputs while authenticated viewers are connected, then restore them.
     pub exclusive: bool,
     pub hp: HpSettings,
+    pub rdp: RdpSettings,
     pub input: InputSettings,
     pub mdns: MdnsSettings,
     pub dev: DevSettings,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RdpSettings {
+    pub enabled: bool,
+    pub listen: SocketAddr,
+    /// PEM certificate and private key. Defaults to the config directory.
+    pub identity_file: Option<PathBuf>,
+    pub codec: RdpCodec,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RdpCodec {
+    #[default]
+    Auto,
+    H264,
+    Remotefx,
+    #[serde(rename = "egfx-remotefx")]
+    EgfxRemotefx,
+}
+
+impl Default for RdpSettings {
+    fn default() -> Self {
+        Self {
+            enabled: cfg!(feature = "rdp"),
+            listen: "0.0.0.0:3389".parse().unwrap(),
+            identity_file: None,
+            codec: RdpCodec::Auto,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -100,6 +133,7 @@ impl Default for Settings {
             resize: true,
             exclusive: false,
             hp: HpSettings::default(),
+            rdp: RdpSettings::default(),
             input: InputSettings::default(),
             mdns: MdnsSettings::default(),
             dev: DevSettings::default(),
@@ -197,6 +231,19 @@ impl Settings {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self.rdp.enabled {
+            if !cfg!(feature = "rdp") {
+                bail!("RDP needs a build with --features rdp");
+            }
+            if self
+                .rdp
+                .identity_file
+                .as_ref()
+                .is_some_and(|p| !p.is_absolute())
+            {
+                bail!("rdp.identity_file must be an absolute path");
+            }
+        }
         if self.exclusive && self.output.is_none() {
             bail!("exclusive mode needs an output to share");
         }
@@ -249,8 +296,50 @@ mod tests {
         assert_eq!(s, Settings::default());
         assert!(s.hp.enabled && s.input.enabled && s.resize && s.mdns.enabled);
         assert!(!s.exclusive);
+        assert_eq!(s.rdp.enabled, cfg!(feature = "rdp"));
+        assert_eq!(s.rdp.listen, "0.0.0.0:3389".parse().unwrap());
+        assert!(
+            !Settings::parse("[rdp]\nenabled = false")
+                .unwrap()
+                .rdp
+                .enabled
+        );
         assert_eq!(s.listen.port(), 5900);
         assert_eq!(s.keyboard().unwrap().command, ModTarget::Super);
+    }
+
+    #[test]
+    fn rdp_codec_defaults_and_values() {
+        assert_eq!(Settings::default().rdp.codec, RdpCodec::Auto);
+        for (value, expected) in [
+            ("auto", RdpCodec::Auto),
+            ("h264", RdpCodec::H264),
+            ("remotefx", RdpCodec::Remotefx),
+            ("egfx-remotefx", RdpCodec::EgfxRemotefx),
+        ] {
+            assert_eq!(
+                Settings::parse(&format!("[rdp]\ncodec = '{value}'"))
+                    .unwrap()
+                    .rdp
+                    .codec,
+                expected
+            );
+        }
+        assert!(Settings::parse("[rdp]\ncodec = 'avc444'").is_err());
+    }
+
+    #[test]
+    fn rdp_requires_the_feature() {
+        let local = "[rdp]\nenabled = true\nlisten = '127.0.0.1:13389'";
+        assert_eq!(Settings::parse(local).is_ok(), cfg!(feature = "rdp"));
+        for address in ["0.0.0.0:3389", "[::]:3389", "[::ffff:192.0.2.1]:3389"] {
+            assert!(
+                Settings::parse(&format!("[rdp]\nenabled = true\nlisten = '{address}'")).is_ok()
+                    == cfg!(feature = "rdp")
+            );
+        }
+        assert!(Settings::parse("[rdp]\nenabled = true\nidentity_file = 'relative.pem'").is_err());
+        assert!(Settings::parse("[rdp]\nallowed_user = 'old-pam-user'").is_err());
     }
 
     #[test]
@@ -305,7 +394,12 @@ mod tests {
 
     #[test]
     fn example_config_parses() {
-        let s = Settings::parse(include_str!("../contrib/config.example.toml")).unwrap();
+        let example = include_str!("../contrib/config.example.toml");
+        assert_eq!(Settings::parse(example).is_ok(), cfg!(feature = "rdp"));
+        let mut s: Settings = toml::from_str(example).unwrap();
+        assert!(s.rdp.enabled);
+        s.rdp.enabled = cfg!(feature = "rdp");
+        s.validate().unwrap();
         assert_eq!(s.output, None);
         assert!(s.hp.enabled && s.input.enabled && s.resize && s.mdns.enabled);
     }

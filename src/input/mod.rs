@@ -14,10 +14,26 @@ use tracing::debug;
 pub use keyboard::{KeyboardConfig, ModTarget};
 pub use pointer::{ButtonOrder, PointerConfig};
 
-/// What the rfb session calls for input. Coordinates are framebuffer pixels.
+/// Creates the input sink for a session, given the framebuffer size.
+pub type InputFactory =
+    std::sync::Arc<dyn Fn(u32, u32) -> Result<Box<dyn InputSink>> + Send + Sync>;
+
+/// Shared protocol input sink. Coordinates are framebuffer pixels.
 pub trait InputSink: Send {
     /// `mac_keycode` is `Some` only when the client set the use-keycode flag.
     fn key(&mut self, down: bool, keysym: u32, mac_keycode: Option<u16>) -> Result<()>;
+    /// Physical evdev code, without Mac modifier remapping.
+    fn physical_key(&mut self, _down: bool, _code: u32) -> Result<()> {
+        anyhow::bail!("physical input is unavailable")
+    }
+    /// Wheel deltas in 1/120 detent units; positive is right/up.
+    fn wheel(&mut self, _x: i32, _y: i32) -> Result<()> {
+        anyhow::bail!("wheel input is unavailable")
+    }
+    /// Side buttons 4 and 5, independent of the RFB button/wheel mask.
+    fn extra_button(&mut self, _button: u8, _down: bool) -> Result<()> {
+        anyhow::bail!("side buttons are unavailable")
+    }
     /// `buttons` as on the wire: bits 0-2 buttons, 3/4 wheel up/down, 5/6 wheel left/right.
     fn pointer(&mut self, x: i32, y: i32, buttons: u8) -> Result<()>;
     fn scroll(&mut self, ev: &ScrollEvent) -> Result<()>;

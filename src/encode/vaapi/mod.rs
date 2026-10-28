@@ -5,6 +5,9 @@
 #[rustfmt::skip]
 mod sys;
 
+#[cfg(feature = "rdp")]
+pub mod h264;
+
 use std::ffi::{CStr, c_int, c_void};
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
@@ -121,6 +124,10 @@ impl Display {
     }
 
     fn hevc_entrypoint(&self) -> Option<VAEntrypoint> {
+        self.encode_entrypoint(VAProfile::VAProfileHEVCMain)
+    }
+
+    fn encode_entrypoint(&self, profile: VAProfile) -> Option<VAEntrypoint> {
         // SAFETY: `dpy` was initialised in `Display::open` and is live while `self` is.
         let max = unsafe { va().vaMaxNumEntrypoints(self.dpy) };
         // A driver reporting no entrypoints has nothing to encode with.
@@ -130,24 +137,19 @@ impl Display {
         // SAFETY: `dpy` is live. libva requires the list to hold `vaMaxNumEntrypoints`
         // entries and writes the used count to `n`, so `eps` is sized from that query.
         let r = unsafe {
-            va().vaQueryConfigEntrypoints(
-                self.dpy,
-                VAProfile::VAProfileHEVCMain,
-                eps.as_mut_ptr().cast(),
-                &mut n,
-            )
+            va().vaQueryConfigEntrypoints(self.dpy, profile, eps.as_mut_ptr().cast(), &mut n)
         };
         if r != 0 {
             return None;
         }
         // Don't trust `n` past the buffer we handed over.
         let n = usize::try_from(n).unwrap_or(0).min(eps.len());
-        pick_hevc_entrypoint(&eps[..n])
+        pick_encode_entrypoint(&eps[..n])
     }
 }
 
 /// Prefers the full encode entrypoint, falling back to low-power.
-fn pick_hevc_entrypoint(eps: &[c_int]) -> Option<VAEntrypoint> {
+fn pick_encode_entrypoint(eps: &[c_int]) -> Option<VAEntrypoint> {
     [
         VAEntrypoint::VAEntrypointEncSlice,
         VAEntrypoint::VAEntrypointEncSliceLP,
@@ -1080,15 +1082,15 @@ mod tests {
         let full = VAEntrypoint::VAEntrypointEncSlice as c_int;
         let vld = VAEntrypoint::VAEntrypointVLD as c_int;
         assert_eq!(
-            pick_hevc_entrypoint(&[vld, lp, full]),
+            pick_encode_entrypoint(&[vld, lp, full]),
             Some(VAEntrypoint::VAEntrypointEncSlice)
         );
         assert_eq!(
-            pick_hevc_entrypoint(&[vld, lp]),
+            pick_encode_entrypoint(&[vld, lp]),
             Some(VAEntrypoint::VAEntrypointEncSliceLP)
         );
-        assert_eq!(pick_hevc_entrypoint(&[vld]), None);
-        assert_eq!(pick_hevc_entrypoint(&[]), None);
+        assert_eq!(pick_encode_entrypoint(&[vld]), None);
+        assert_eq!(pick_encode_entrypoint(&[]), None);
     }
 }
 
@@ -1350,15 +1352,30 @@ unsafe fn read_coded(dpy: VADisplay, buf: VABufferID) -> Result<Vec<u8>> {
     unsafe {
         let mut seg: *mut c_void = ptr::null_mut();
         check(va().vaMapBuffer(dpy, buf, &mut seg), "map coded buffer")?;
-        while !seg.is_null() {
-            let s = &*(seg as *const VACodedBufferSegment);
-            data.extend_from_slice(std::slice::from_raw_parts(
-                s.buf as *const u8,
-                s.size as usize,
-            ));
-            seg = s.next;
-        }
+        let read = (|| -> Result<()> {
+            while !seg.is_null() {
+                let s = &*(seg as *const VACodedBufferSegment);
+                let errors = VA_CODED_BUF_STATUS_BAD_BITSTREAM
+                    | VA_CODED_BUF_STATUS_BITRATE_OVERFLOW
+                    | VA_CODED_BUF_STATUS_FRAME_SIZE_OVERFLOW;
+                if s.status & errors != 0 {
+                    bail!("VA coded buffer error: {:#x}", s.status);
+                }
+                if s.size > 0 {
+                    if s.buf.is_null() {
+                        bail!("VA coded buffer has no data");
+                    }
+                    data.extend_from_slice(std::slice::from_raw_parts(
+                        s.buf as *const u8,
+                        s.size as usize,
+                    ));
+                }
+                seg = s.next;
+            }
+            Ok(())
+        })();
         va().vaUnmapBuffer(dpy, buf);
+        read?;
     }
     Ok(data)
 }

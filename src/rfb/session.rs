@@ -1136,7 +1136,7 @@ pub(crate) fn canonical_ip(ip: std::net::IpAddr) -> std::net::IpAddr {
 }
 
 /// Detects silently dropped viewers (sleep, Wi-Fi loss) within about 30 s.
-fn set_keepalive(stream: &TcpStream) {
+pub(crate) fn set_keepalive(stream: &TcpStream) {
     let ka = socket2::TcpKeepalive::new()
         .with_time(Duration::from_secs(15))
         .with_interval(Duration::from_secs(5));

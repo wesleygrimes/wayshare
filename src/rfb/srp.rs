@@ -27,7 +27,7 @@ pub fn modulus() -> BigUint {
     BigUint::parse_bytes(N_HEX.as_bytes(), 16).expect("valid hex")
 }
 
-fn pad(n: &BigUint) -> [u8; N_LEN] {
+pub(crate) fn pad(n: &BigUint) -> [u8; N_LEN] {
     let bytes = n.to_bytes_be();
     let mut out = [0u8; N_LEN];
     out[N_LEN - bytes.len()..].copy_from_slice(&bytes);

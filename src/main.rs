@@ -33,6 +33,17 @@ struct ServeArgs {
     config: Option<PathBuf>,
     #[arg(long)]
     listen: Option<SocketAddr>,
+    /// Enable the TLS RDP listener with shared Apple login.
+    #[arg(long, overrides_with = "no_rdp")]
+    rdp: bool,
+    #[arg(long)]
+    no_rdp: bool,
+    /// RDP listen address. Defaults to loopback.
+    #[arg(long)]
+    rdp_listen: Option<SocketAddr>,
+    /// PEM certificate and private key, generated if absent.
+    #[arg(long)]
+    rdp_identity_file: Option<PathBuf>,
     /// SRP verifier file written by `wayshare set-password` (security type 36).
     #[arg(long)]
     srp_file: Option<PathBuf>,
@@ -94,6 +105,13 @@ impl ServeArgs {
         let flag = |on: bool, off: bool, cur: bool| if off { false } else { on || cur };
         if let Some(v) = self.listen {
             s.listen = v;
+        }
+        s.rdp.enabled = flag(self.rdp, self.no_rdp, s.rdp.enabled);
+        if let Some(v) = self.rdp_listen {
+            s.rdp.listen = v;
+        }
+        if self.rdp_identity_file.is_some() {
+            s.rdp.identity_file = self.rdp_identity_file;
         }
         if self.srp_file.is_some() {
             s.srp_file = self.srp_file;
@@ -239,14 +257,13 @@ fn run_command(command: Command) -> Result<()> {
 
 async fn run(s: Settings) -> Result<()> {
     let mut auth = AuthConfig::default();
-    let srp_path = s.srp_path()?;
-    match VerifierRecord::load(&srp_path) {
-        Ok(rec) => auth.srp = Some(rec),
-        Err(e) if s.srp_file.is_some() || s.dev.dh_username.is_none() => {
-            return Err(e.context("run `wayshare setup` first"));
+    let srp_error = match s.srp_path().and_then(|path| VerifierRecord::load(&path)) {
+        Ok(rec) => {
+            auth.srp = Some(rec);
+            None
         }
-        Err(_) => {}
-    }
+        Err(error) => Some(error),
+    };
     if let (Some(user), Some(path)) = (&s.dev.dh_username, &s.dev.dh_password_file) {
         auth.dh = Some(Arc::new(StaticPassword::from_file(user.clone(), path)?));
     }
@@ -349,7 +366,58 @@ async fn run(s: Settings) -> Result<()> {
     } else {
         None
     };
+    #[cfg(feature = "rdp")]
+    if s.rdp.enabled {
+        let cfg = Arc::new(cfg);
+        let rdp = async {
+            if let Some(error) = srp_error {
+                return Err(error.context("SRP record unavailable; run `wayshare set-password`"));
+            }
+            let identity = match &s.rdp.identity_file {
+                Some(path) => path.clone(),
+                None => wayshare::config::config_dir()?.join("rdp-identity.pem"),
+            };
+            wayshare::rdp::serve(
+                s.rdp.listen,
+                &identity,
+                cfg.frame_source.clone(),
+                cfg.input.clone(),
+                cfg.display.clone(),
+                cfg.auth.clone(),
+                s.rdp.codec,
+            )
+            .await
+        };
+        // RDP failure must not stop Apple sessions or their listener.
+        let rfb_config = cfg.clone();
+        return rfb::serve(
+            s.listen,
+            rfb_config,
+            shutdown_with_rdp(rdp, shutdown_signal()),
+        )
+        .await;
+    }
+    if let Some(error) = srp_error {
+        warn!("SRP login unavailable: {error:#}; run `wayshare set-password`");
+    }
     rfb::serve(s.listen, Arc::new(cfg), shutdown_signal()).await
+}
+
+#[cfg(feature = "rdp")]
+async fn shutdown_with_rdp(
+    rdp: impl std::future::Future<Output = Result<()>>,
+    shutdown: impl std::future::Future<Output = ()>,
+) {
+    tokio::pin!(shutdown);
+    tokio::select! {
+        () = &mut shutdown => {},
+        result = rdp => {
+            if let Err(error) = result {
+                tracing::error!("RDP disabled: {error:#}; check rdp.listen and rdp.identity_file, including directory permissions; Apple RFB continues");
+            }
+            shutdown.await;
+        },
+    }
 }
 
 async fn shutdown_signal() {
@@ -369,6 +437,119 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "rdp")]
+    #[tokio::test]
+    async fn missing_credentials_or_broken_tls_leave_rfb_running() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio::time::{Duration, sleep, timeout};
+
+        for failure in [
+            "missing-srp",
+            "unreadable-srp",
+            "invalid-tls",
+            "uncreatable-tls",
+        ] {
+            let dir = std::env::temp_dir()
+                .join(format!("wayshare-rdp-startup-{}", rand::random::<u64>()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let srp = dir.join("srp");
+            let identity = dir.join("identity.pem");
+            match failure {
+                "missing-srp" => {}
+                "unreadable-srp" => std::fs::create_dir(&srp).unwrap(),
+                _ => VerifierRecord::generate("viewer", b"test", 4)
+                    .save(&srp)
+                    .unwrap(),
+            }
+            if failure == "invalid-tls" {
+                std::fs::write(&identity, "invalid").unwrap();
+            }
+            if failure == "uncreatable-tls" {
+                std::fs::write(&identity, "blocks parent directory").unwrap();
+            }
+            let rfb_reserved = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let rfb_address = rfb_reserved.local_addr().unwrap();
+            let rdp_reserved = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let rdp_address = rdp_reserved.local_addr().unwrap();
+            let mut settings = Settings {
+                listen: rfb_address,
+                srp_file: Some(srp),
+                ..Settings::default()
+            };
+            settings.rdp.listen = rdp_address;
+            settings.rdp.identity_file = Some(if failure == "uncreatable-tls" {
+                identity.join("child.pem")
+            } else {
+                identity
+            });
+            settings.dev.test_pattern = true;
+            settings.mdns.enabled = false;
+            settings.hp.enabled = false;
+            drop((rfb_reserved, rdp_reserved));
+            let clients = async {
+                let mut first = loop {
+                    match TcpStream::connect(rfb_address).await {
+                        Ok(stream) => break stream,
+                        Err(_) => sleep(Duration::from_millis(10)).await,
+                    }
+                };
+                let mut greeting = [0; 12];
+                first.read_exact(&mut greeting).await.unwrap();
+                assert_eq!(&greeting, rfb::handshake::SERVER_VERSION);
+                // Give the RDP startup future time to fail, then check both listeners.
+                sleep(Duration::from_millis(50)).await;
+                assert!(TcpStream::connect(rdp_address).await.is_err(), "{failure}");
+                assert!(
+                    timeout(Duration::from_millis(50), first.read(&mut [0]))
+                        .await
+                        .is_err(),
+                    "{failure}"
+                );
+                let mut second = TcpStream::connect(rfb_address).await.unwrap();
+                second.read_exact(&mut greeting).await.unwrap();
+                assert_eq!(&greeting, rfb::handshake::SERVER_VERSION);
+                if failure.ends_with("tls") {
+                    second
+                        .write_all(rfb::handshake::SERVER_VERSION)
+                        .await
+                        .unwrap();
+                    let mut offer = [0; 2];
+                    second.read_exact(&mut offer).await.unwrap();
+                    assert_eq!(offer, [1, rfb::handshake::SECURITY_SRP]);
+                }
+            };
+            tokio::select! {
+                result = run(settings) => panic!("RFB stopped after {failure}: {result:?}"),
+                result = timeout(Duration::from_secs(5), clients) => result.unwrap(),
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn rdp_flags_override_the_config() {
+        let mut settings = Settings::default();
+        settings.rdp.enabled = true;
+        let cli = Cli::try_parse_from([
+            "wayshare",
+            "--rdp",
+            "--no-rdp",
+            "--rdp-listen",
+            "127.0.0.1:13389",
+            "--rdp-identity-file",
+            "/tmp/test-rdp.pem",
+        ])
+        .unwrap();
+        cli.serve.apply(&mut settings);
+        assert!(!settings.rdp.enabled);
+        assert_eq!(settings.rdp.listen.port(), 13389);
+        assert_eq!(
+            settings.rdp.identity_file,
+            Some(PathBuf::from("/tmp/test-rdp.pem"))
+        );
+    }
 
     #[test]
     fn exclusive_flags_override_config_independently_of_resize() {
