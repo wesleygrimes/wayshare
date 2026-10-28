@@ -24,6 +24,9 @@ the distro library.
 
 ## Install
 
+Release archives include `THIRD-PARTY-LICENSES`. Install it under
+`/usr/share/licenses/wayshare/` with the package.
+
 ```sh
 install -Dm755 target/release/wayshare "$pkgdir/usr/bin/wayshare"
 sed 's|@bindir@|/usr/bin|' contrib/wayshare.service.in > wayshare.service

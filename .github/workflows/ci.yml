@@ -33,6 +33,7 @@ jobs:
       - run: mise run check
       - run: mise run check:no-rdp
       - run: mise run audit
+      - run: mise run licenses
 
   macos:
     name: macos

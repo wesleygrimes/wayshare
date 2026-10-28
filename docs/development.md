@@ -38,8 +38,8 @@ This puts `wayshare` in `~/.cargo/bin` and its unit in `~/.local/share/systemd/u
 
 [mise](https://mise.jdx.dev) is optional, but CI runs these same tasks. It reads the
 toolchain pin from `rust-toolchain.toml` and pins ShellCheck, actionlint, cargo-deny,
-cocogitto, git-cliff and `bindgen-cli`. Run `mise run setup` once to install them. Setup lists any
-missing Linux system packages but never uses sudo.
+cargo-about, cocogitto, git-cliff and `bindgen-cli`. Run `mise run setup` once to
+install them. Setup lists any missing Linux system packages but never uses sudo.
 
 | Task | Does |
 |---|---|
@@ -54,6 +54,7 @@ missing Linux system packages but never uses sudo.
 | `mise run check:commits <base>` | check that commits in `<base>..HEAD` are Conventional Commits |
 | `mise run build` | dev build; add `--release` for the optimized, locked build |
 | `mise run audit` | cargo-deny for default and all features: advisories, licenses, sources |
+| `mise run licenses` | generate `THIRD-PARTY-LICENSES` for both Linux release targets |
 | `mise run changelog` | preview unreleased notes on stdout; writes nothing |
 | `mise run release <version> [--dry-run] [--tag]` | prepare a release PR, or tag it; see [releasing.md](releasing.md) |
 | `mise run gen-vaapi-sys` | regenerate the libva bindings (Linux) |

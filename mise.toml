@@ -6,6 +6,7 @@ idiomatic_version_file_enable_tools = ["rust"]
 shellcheck = "0.11.0"
 actionlint = "1.7.12"
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2"
+"github:EmbarkStudios/cargo-about" = "0.9.3"
 "aqua:cocogitto/cocogitto" = "7.0.0"
 "aqua:orhun/git-cliff" = "2.14.2"
 
@@ -71,6 +72,10 @@ run = 'cargo build --locked ${usage_release:+--release}'
 [tasks.audit]
 description = "Check dependency advisories, licenses and sources (needs network)"
 run = ["cargo deny --locked check", "cargo deny --locked --all-features check"]
+
+[tasks.licenses]
+description = "Write THIRD-PARTY-LICENSES for the release archives"
+run = "cargo about generate --locked --fail about.hbs -o THIRD-PARTY-LICENSES"
 
 [tasks.changelog]
 description = "Preview the unreleased release notes on stdout; writes nothing"
