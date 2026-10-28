@@ -161,7 +161,7 @@ pub fn run() -> Result<bool> {
     let bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == s.listen.ip());
     let lan_ip = bound.map(|a| a.ip).or_else(setup::lan_ipv4);
     let hint = || setup::ufw_hint(port, bound, lan_ip, &addrs);
-    match setup::firewall(port) {
+    match setup::firewall(s.listen) {
         Firewall::Off => r.ok("Firewall", "ufw is off"),
         Firewall::Allows => r.ok("Firewall", &format!("ufw allows TCP {port}")),
         Firewall::Blocks => r.fail(
@@ -180,7 +180,7 @@ pub fn run() -> Result<bool> {
         let rdp_bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == s.rdp.listen.ip());
         let rdp_ip = rdp_bound.map(|a| a.ip).or_else(setup::lan_ipv4);
         let rdp_hint = || setup::ufw_hint(rdp_port, rdp_bound, rdp_ip, &addrs);
-        match setup::firewall(rdp_port) {
+        match setup::firewall(s.rdp.listen) {
             Firewall::Off => r.ok("RDP firewall", "ufw is off"),
             Firewall::Allows => r.ok("RDP firewall", &format!("ufw allows TCP {rdp_port}")),
             Firewall::Blocks => r.warn(
