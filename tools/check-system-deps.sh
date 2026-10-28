@@ -22,7 +22,7 @@ case " ${ID:-} ${ID_LIKE:-} " in
     ;;
   *" fedora "* | *" rhel "*)
     install="sudo dnf install"
-    packages=(gcc pkgconf-pkg-config libglvnd-devel mesa-libgbm-devel)
+    packages=(gcc gcc-c++ pkgconf-pkg-config libglvnd-devel mesa-libgbm-devel)
     installed() { rpm -q "$1" >/dev/null 2>&1; }
     ;;
   *)
