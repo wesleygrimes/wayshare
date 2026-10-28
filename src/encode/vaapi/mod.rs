@@ -14,6 +14,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
@@ -996,6 +997,150 @@ fn finish_detection<T>(
 mod tests {
     use super::*;
 
+    fn coded_segment(data: &mut [u8], status: u32) -> VACodedBufferSegment {
+        VACodedBufferSegment {
+            size: data.len().try_into().unwrap(),
+            bit_offset: 0,
+            status,
+            reserved: 0,
+            buf: data.as_mut_ptr().cast(),
+            next: ptr::null_mut(),
+            va_reserved: [0; 4],
+        }
+    }
+
+    #[test]
+    fn coded_segments_preserve_bytes_on_constraint_overflow() {
+        for status in [
+            0,
+            VA_CODED_BUF_STATUS_BITRATE_OVERFLOW,
+            VA_CODED_BUF_STATUS_FRAME_SIZE_OVERFLOW,
+            VA_CODED_BUF_STATUS_BITRATE_OVERFLOW | VA_CODED_BUF_STATUS_FRAME_SIZE_OVERFLOW,
+        ] {
+            let mut bytes = [0, 0, 0, 1, 0x26, 1, 0xab];
+            let segment = coded_segment(&mut bytes, status);
+            // SAFETY: The segment and its bytes stay live and unchanged during the copy.
+            let data = unsafe { copy_coded_segments(&segment) }.unwrap();
+            assert_eq!(data, bytes, "status {status:#x}");
+        }
+    }
+
+    #[test]
+    fn coded_segments_reject_bad_bitstream_even_with_overflow() {
+        for status in [
+            VA_CODED_BUF_STATUS_BAD_BITSTREAM,
+            VA_CODED_BUF_STATUS_BAD_BITSTREAM | VA_CODED_BUF_STATUS_BITRATE_OVERFLOW,
+            VA_CODED_BUF_STATUS_BAD_BITSTREAM | VA_CODED_BUF_STATUS_FRAME_SIZE_OVERFLOW,
+        ] {
+            let mut bytes = [1, 2, 3];
+            let segment = coded_segment(&mut bytes, status);
+            // SAFETY: The segment and its bytes stay live and unchanged during the copy.
+            let error = unsafe { copy_coded_segments(&segment) }.unwrap_err();
+            assert!(error.to_string().contains("VA coded buffer error"));
+        }
+    }
+
+    #[test]
+    fn coded_segments_reject_nonempty_null_data() {
+        for status in [0, VA_CODED_BUF_STATUS_BITRATE_OVERFLOW] {
+            let mut segment = coded_segment(&mut [], status);
+            segment.size = 1;
+            segment.buf = ptr::null_mut();
+            // SAFETY: The segment is live; null data pointers are handled by the reader.
+            let error = unsafe { copy_coded_segments(&segment) }.unwrap_err();
+            assert_eq!(error.to_string(), "VA coded buffer has no data");
+        }
+    }
+
+    #[test]
+    fn coded_segments_allow_empty_buffers() {
+        // SAFETY: A null pointer represents an empty segment list.
+        assert!(
+            unsafe { copy_coded_segments(ptr::null()) }
+                .unwrap()
+                .is_empty()
+        );
+        let mut segment = coded_segment(&mut [], 0);
+        segment.buf = ptr::null_mut();
+        // SAFETY: The segment is live; no bytes are read from its null data pointer.
+        assert!(unsafe { copy_coded_segments(&segment) }.unwrap().is_empty());
+    }
+
+    #[test]
+    fn coded_segments_concatenate_and_skip_empty_segments() {
+        let mut first = [1, 2];
+        let mut last = [3, 4, 5];
+        let mut tail = coded_segment(&mut last, VA_CODED_BUF_STATUS_FRAME_SIZE_OVERFLOW);
+        let mut empty = coded_segment(&mut [], 0);
+        empty.buf = ptr::null_mut();
+        empty.next = (&mut tail as *mut VACodedBufferSegment).cast();
+        let mut head = coded_segment(&mut first, VA_CODED_BUF_STATUS_BITRATE_OVERFLOW);
+        head.next = (&mut empty as *mut VACodedBufferSegment).cast();
+        // SAFETY: All three segments and their bytes remain live and unchanged. The chain
+        // ends at `tail`, and the empty middle segment has no bytes to read.
+        let data = unsafe { copy_coded_segments(&head) }.unwrap();
+        assert_eq!(data, [1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn hevc_collector_delivers_overflow_frames_and_continues() {
+        let collector = Collector::spawn_with_reader(|status| {
+            let mut bytes = [0, 0, 0, 1, 0x26, 1, 0xab];
+            let segment = coded_segment(&mut bytes, status);
+            // SAFETY: This mock mapping and its bytes stay live until copying finishes.
+            unsafe { copy_coded_segments(&segment) }
+        })
+        .unwrap();
+        let (tx, rx) = mpsc::channel();
+        *collector.output.lock().unwrap() = Some(tx);
+        for (seq, status) in [
+            0,
+            VA_CODED_BUF_STATUS_BITRATE_OVERFLOW,
+            VA_CODED_BUF_STATUS_FRAME_SIZE_OVERFLOW,
+            VA_CODED_BUF_STATUS_BITRATE_OVERFLOW | VA_CODED_BUF_STATUS_FRAME_SIZE_OVERFLOW,
+            0,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            collector
+                .jobs
+                .as_ref()
+                .unwrap()
+                .send(Job {
+                    slot: 0,
+                    pics: vec![(0, true, status)],
+                    submitted: Instant::now(),
+                    meta: Some(EncodedFrame {
+                        seq: seq as u64,
+                        changed_tiles: [true; TILE_COUNT],
+                        tiles: vec![],
+                        timings: Default::default(),
+                        presented: None,
+                        frame_size: (64, 64),
+                    }),
+                })
+                .unwrap();
+            let frame = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+            assert_eq!(frame.seq, seq as u64);
+            assert_eq!(frame.tiles.len(), 1);
+            assert_eq!(frame.tiles[0].index, 0);
+            assert!(frame.tiles[0].keyframe);
+            assert_eq!(frame.tiles[0].data, [0, 0, 0, 1, 0x26, 1, 0xab]);
+            assert_eq!(
+                collector
+                    .sizes
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap(),
+                7
+            );
+            assert_eq!(
+                collector.free.recv_timeout(Duration::from_secs(5)).unwrap(),
+                0
+            );
+        }
+    }
+
     fn test_sequence() -> SeqConfig {
         SeqConfig {
             width: 2560,
@@ -1266,6 +1411,17 @@ struct Collector {
 
 impl Collector {
     fn spawn(dpy: Dpy) -> Result<Self> {
+        Self::spawn_with_reader(move |buf| {
+            let dpy = dpy;
+            // SAFETY: `dpy` outlives this thread (see the `Dpy` impl), and `buf` is one
+            // of the session's coded buffers. It is not reused until the job's slot is free.
+            unsafe { read_coded(dpy.0, buf) }
+        })
+    }
+
+    fn spawn_with_reader(
+        mut read: impl FnMut(VABufferID) -> Result<Vec<u8>> + Send + 'static,
+    ) -> Result<Self> {
         let (jobs, job_rx) = mpsc::channel::<Job>();
         let (res_tx, results) = mpsc::channel();
         let (free_tx, free) = mpsc::channel();
@@ -1275,16 +1431,12 @@ impl Collector {
         let thread = std::thread::Builder::new()
             .name("hevc-collect".into())
             .spawn(move || {
-                let dpy = dpy;
                 for mut job in job_rx {
                     let r = job
                         .pics
                         .iter()
                         .map(|&(index, keyframe, buf)| {
-                            // SAFETY: `dpy` outlives this thread (see the `Dpy` impl), and
-                            // `buf` is one of the session's coded buffers, which are not reused
-                            // until this job reports its slot free.
-                            let data = unsafe { read_coded(dpy.0, buf)? };
+                            let data = read(buf)?;
                             Ok(EncodedTile {
                                 index,
                                 keyframe,
@@ -1335,7 +1487,7 @@ impl Drop for Collector {
 /// # Safety
 ///
 /// `dpy` must be an initialised display and `buf` a coded buffer on it that has been submitted
-/// and is not destroyed during the call.
+/// and is not reused or destroyed during the call.
 unsafe fn read_coded(dpy: VADisplay, buf: VABufferID) -> Result<Vec<u8>> {
     loop {
         // SAFETY: Upheld by this function's contract.
@@ -1345,37 +1497,57 @@ unsafe fn read_coded(dpy: VADisplay, buf: VABufferID) -> Result<Vec<u8>> {
             s => check(s, "vaSyncBuffer")?,
         }
     }
+    let mut seg: *mut c_void = ptr::null_mut();
+    // SAFETY: The display and submitted buffer are live, and `seg` is a valid out pointer.
+    check(
+        unsafe { va().vaMapBuffer(dpy, buf, &mut seg) },
+        "map coded buffer",
+    )?;
+    // SAFETY: libva supplies a terminated segment list and readable data for each non-null
+    // `buf`. The mapping stays live and the buffer is not reused while copying the segments.
+    let data = unsafe { copy_coded_segments(seg.cast()) };
+    // SAFETY: The buffer was mapped successfully and no references into it remain. Unmap
+    // even when copying failed, so a bad segment does not leave the buffer mapped.
+    unsafe { va().vaUnmapBuffer(dpy, buf) };
+    data
+}
+
+/// Copies a mapped coded buffer without retaining pointers into the mapping.
+///
+/// # Safety
+///
+/// `seg` must head a finite, null-terminated chain of aligned, initialised segments. Each
+/// non-null `buf` must point to `size` readable bytes. Segments and data must remain live
+/// and unchanged during the call. Null data pointers are checked before reading.
+unsafe fn copy_coded_segments(mut seg: *const VACodedBufferSegment) -> Result<Vec<u8>> {
+    static WARNED_OVERFLOW: AtomicBool = AtomicBool::new(false);
+
     let mut data = Vec::new();
-    // SAFETY: Upheld by this function's contract. The segment list from vaMapBuffer is valid
-    // until vaUnmapBuffer, each `buf` points at `size` bytes, and `seg` is null-checked before
-    // each dereference.
-    unsafe {
-        let mut seg: *mut c_void = ptr::null_mut();
-        check(va().vaMapBuffer(dpy, buf, &mut seg), "map coded buffer")?;
-        let read = (|| -> Result<()> {
-            while !seg.is_null() {
-                let s = &*(seg as *const VACodedBufferSegment);
-                let errors = VA_CODED_BUF_STATUS_BAD_BITSTREAM
-                    | VA_CODED_BUF_STATUS_BITRATE_OVERFLOW
-                    | VA_CODED_BUF_STATUS_FRAME_SIZE_OVERFLOW;
-                if s.status & errors != 0 {
-                    bail!("VA coded buffer error: {:#x}", s.status);
-                }
-                if s.size > 0 {
-                    if s.buf.is_null() {
-                        bail!("VA coded buffer has no data");
-                    }
-                    data.extend_from_slice(std::slice::from_raw_parts(
-                        s.buf as *const u8,
-                        s.size as usize,
-                    ));
-                }
-                seg = s.next;
+    while !seg.is_null() {
+        // SAFETY: The caller keeps each segment live and aligned; `seg` is non-null.
+        let s = unsafe { &*seg };
+        if s.status & VA_CODED_BUF_STATUS_BAD_BITSTREAM != 0 {
+            bail!("VA coded buffer error: {:#x}", s.status);
+        }
+        let overflows =
+            VA_CODED_BUF_STATUS_BITRATE_OVERFLOW | VA_CODED_BUF_STATUS_FRAME_SIZE_OVERFLOW;
+        // These flags report constraint overshoots; the encoded frame is still usable.
+        if s.status & overflows != 0 && !WARNED_OVERFLOW.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                status = s.status,
+                "VA coded buffer exceeded bitrate or frame size constraints; using encoded frame (logged once per process)"
+            );
+        }
+        if s.size > 0 {
+            if s.buf.is_null() {
+                bail!("VA coded buffer has no data");
             }
-            Ok(())
-        })();
-        va().vaUnmapBuffer(dpy, buf);
-        read?;
+            // SAFETY: `buf` is non-null and the caller guarantees `size` readable bytes.
+            data.extend_from_slice(unsafe {
+                std::slice::from_raw_parts(s.buf.cast::<u8>(), s.size as usize)
+            });
+        }
+        seg = s.next.cast();
     }
     Ok(data)
 }

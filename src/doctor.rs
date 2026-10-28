@@ -161,7 +161,7 @@ pub fn run() -> Result<bool> {
     let bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == s.listen.ip());
     let lan_ip = bound.map(|a| a.ip).or_else(setup::lan_ipv4);
     let hint = || setup::ufw_hint(port, bound, lan_ip, &addrs);
-    match setup::firewall(port) {
+    match setup::firewall(s.listen) {
         Firewall::Off => r.ok("Firewall", "ufw is off"),
         Firewall::Allows => r.ok("Firewall", &format!("ufw allows TCP {port}")),
         Firewall::Blocks => r.fail(
@@ -177,10 +177,11 @@ pub fn run() -> Result<bool> {
     }
 
     if let Some(rdp_port) = rdp_firewall_port(&s) {
-        let rdp_bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == s.rdp.listen.ip());
+        let rdp_listen = s.rdp_listen();
+        let rdp_bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == rdp_listen.ip());
         let rdp_ip = rdp_bound.map(|a| a.ip).or_else(setup::lan_ipv4);
         let rdp_hint = || setup::ufw_hint(rdp_port, rdp_bound, rdp_ip, &addrs);
-        match setup::firewall(rdp_port) {
+        match setup::firewall(rdp_listen) {
             Firewall::Off => r.ok("RDP firewall", "ufw is off"),
             Firewall::Allows => r.ok("RDP firewall", &format!("ufw allows TCP {rdp_port}")),
             Firewall::Blocks => r.warn(
@@ -225,7 +226,8 @@ pub fn run() -> Result<bool> {
 /// without the `rdp` feature, where it can't be enabled) or only listens on loopback.
 /// Matches the ports `wayshare setup` offers rules for.
 fn rdp_firewall_port(s: &Settings) -> Option<u16> {
-    (s.rdp.enabled && !s.rdp.listen.ip().is_loopback()).then(|| s.rdp.listen.port())
+    let listen = s.rdp_listen();
+    (s.rdp.enabled && !listen.ip().is_loopback()).then(|| listen.port())
 }
 
 fn systemctl_query(verb: &str) -> String {
@@ -245,11 +247,14 @@ mod tests {
         let mut s = Settings::default();
         s.rdp.enabled = true;
         assert_eq!(rdp_firewall_port(&s), Some(3389));
-        s.rdp.listen = "192.168.1.50:3390".parse().unwrap();
+        s.rdp.listen = Some("192.168.1.50:3390".parse().unwrap());
         assert_eq!(rdp_firewall_port(&s), Some(3390));
-        s.rdp.listen = "127.0.0.1:3389".parse().unwrap();
+        s.rdp.listen = Some("127.0.0.1:3389".parse().unwrap());
         assert_eq!(rdp_firewall_port(&s), None);
-        s.rdp.listen = "0.0.0.0:3389".parse().unwrap();
+        s.rdp.listen = None;
+        s.listen = "127.0.0.1:5900".parse().unwrap();
+        assert_eq!(rdp_firewall_port(&s), None);
+        s.listen = "0.0.0.0:5900".parse().unwrap();
         s.rdp.enabled = false;
         assert_eq!(rdp_firewall_port(&s), None);
     }

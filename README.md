@@ -16,7 +16,7 @@ Windows App and FreeRDP.
 - On the Mac, copy text, rich text, and images. Use High Performance for video and sound.
 - On RDP, use H.264 or Planar graphics. Live resize and rotation work on iPhone.
 
-RDP is on by default at `0.0.0.0:3389`. See the [tested clients](docs/clients.md)
+RDP is on by default on port 3389 at the Apple listen address. See the [tested clients](docs/clients.md)
 for each client's verified behavior.
 
 <img src="docs/media/screenshot.jpg" alt="An Omarchy desktop open in the Mac's Screen Sharing app" width="720">
@@ -75,9 +75,9 @@ Setup saves your choices, starts wayshare, and displays the address and username
 Both protocols use that username and password. Setup offers ufw rules for TCP 5900
 and 3389. On an existing install, rerun setup or open TCP 3389 to your LAN or VPN.
 
-The network choice controls Apple Screen Sharing. RDP listens on all IPv4
-interfaces by default. See [Security](docs/security.md) to restrict both protocols
-to your VPN.
+The network choice applies to both protocols. RDP uses the same address on port
+3389 unless `[rdp] listen` sets its own. See [Security](docs/security.md) for VPN
+access.
 
 Run `wayshare setup` again to change your choices. For
 [other settings](docs/configuration.md), edit `~/.config/wayshare/config.toml`, then run
@@ -95,7 +95,8 @@ you send your password. Follow the [Windows App and mstsc](docs/connect/windows-
 or [FreeRDP](docs/connect/freerdp.md) quickstart.
 
 For connection or startup problems, run `wayshare doctor` and see
-[Troubleshooting](docs/troubleshooting.md). Doctor does not check RDP.
+[Troubleshooting](docs/troubleshooting.md). For RDP, doctor checks the ufw rule
+but does not connect to the listener.
 
 ## Commands
 
