@@ -1,10 +1,9 @@
 # RDP
 
-RDP streams the shared monitor over TLS with H.264/AVC420, RemoteFX or compressed bitmap updates.
-It uses the same username and password as Apple Screen Sharing, including high
-performance mode. RDP is included in the default Cargo features. Its runtime listener
-is disabled by default, with `127.0.0.1:3389` as the default address.
-Build with `--no-default-features` to omit RDP.
+RDP streams the shared monitor over TLS with H.264/AVC420, Planar, legacy RemoteFX
+or bitmap updates. It uses the same username and password as Apple Screen Sharing.
+Default builds include RDP, but its listener is disabled until enabled in config.
+Build with `--no-default-features` to omit it.
 
 ## Enable the listener
 
@@ -17,209 +16,133 @@ codec = "auto"
 ```
 
 `--rdp`, `--no-rdp`, `--rdp-listen` and `--rdp-identity-file` override these settings.
-A build without RDP rejects an enabled listener. To accept connections from another
-device, set `listen = "0.0.0.0:3389"`, or choose one LAN or Tailscale address.
+For remote access, choose a LAN or Tailscale address, or use `0.0.0.0:3389`.
 `[::]:3389` binds IPv6; IPv4 access depends on the host's socket policy.
-Startup requires Apple mode credentials before opening the RDP listener.
-Allow the chosen TCP port through your firewall and verify the certificate before
-sending a password. RDP has no discovery advertisement. Port 3389 is the standard port.
+Startup requires Apple mode credentials. Allow the chosen TCP port through your
+firewall. RDP has no discovery advertisement.
 
-Enabling RDP automatically alongside RFB would require changing `rdp.enabled` and
-choosing a bind address. That changes which network listeners start, so it remains an
-explicit configuration choice.
+## Login and TLS
 
-## Video codec
+Use the exact, case-sensitive Apple mode username and leave the domain empty.
+The username need not be a Linux account. Both protocols load the same `srp_file`,
+which defaults to `$XDG_CONFIG_HOME/wayshare/srp-$USER` or
+`~/.config/wayshare/srp-$USER`. It stores a salt and verifier, not a password.
+RDP verifies the submitted password against that record. Restart after changing it.
+The development ARD credentials also work when configured. There is no PAM,
+keyring, NLA, CredSSP or smart-card login in this adapter.
 
-`rdp.codec` accepts `"auto"`, `"h264"`, `"remotefx"` and `"egfx-remotefx"`.
-The default, `"auto"`, prefers H.264/AVC420 over the Graphics Pipeline Extension,
-MS-RDPEGFX. `"h264"` has the same
-fallback rules. `"remotefx"` disables EGFX and uses the client's legacy RemoteFX
-capability. Clients without RemoteFX receive compressed bitmap updates.
+Credentials must pass before capture updates or input start. Failed attempts wait
+at least two seconds. At most eight connections are admitted, with a 30-second
+login deadline. Password verification runs on blocking workers. Submitted passwords
+are not saved or logged; owned validation copies and decoded credentials are cleared
+after use, including cancellation. This does not erase every temporary memory copy.
 
-The server confirms the highest client-advertised EGFX version. It uses AVC420 only
-when that version permits it. Version 8.1 requires `AVC420_ENABLED`. Clients without
-AVC420 support use legacy RemoteFX or bitmap updates. Clients without EGFX use
-the same legacy path. The server preserves the client's capability flags. When AVC
-is available, it sends AVC420 only, even if the selected version also supports
-AVC444.
+After activation and successful login, the server sends Save Session Info once,
+using Logon Info Version 2, the authenticated username and an empty domain.
+A process-wide counter assigns the 32-bit session ID. It distinguishes logons
+within that server process and resets on restart; it is not a reconnect cookie.
+The log is `RDP Save Session Info sent` with `username` and `session_id`.
+This notification enables live rotation in the iOS Windows App. See the
+[rotation finding](rdp-ios-rotation.md).
 
-`"egfx-remotefx"` explicitly selects experimental RemoteFX over EGFX with codec ID
-`CAVIDEO`. This path causes protocol errors in the iOS Windows App and is excluded
-from `"auto"` and `"h264"`. Use it only to test EGFX compatibility.
+On first use, wayshare creates a self-signed localhost ECDSA certificate and key in
+one PEM file with mode 0600. It reuses that identity. The default path is
+`$XDG_CONFIG_HOME/wayshare/rdp-identity.pem`, or
+`~/.config/wayshare/rdp-identity.pem`. `identity_file` must be absolute.
+Invalid existing files cause an error and are not replaced.
 
-On Linux, H.264 first tries VA-API Constrained Baseline on `/dev/dri/renderD128`, using
-8-bit NV12, constant QP 24, I and P pictures, and one reference picture. The driver
-must support YUV420, constant-QP encoding and packed SPS/PPS/slice headers. The encoder
-uploads the captured RGB frame and uses VA-API's video processor to convert it. If initialization fails,
-OpenH264 provides a software Baseline encoder. If neither encoder works, the session
-uses RemoteFX. These encoders are separate from Apple high-performance mode's HEVC
-encoder.
-
-Coded dimensions round up to multiples of 16. One region mask covers the visible
-surface and crops the padding. The H.264 level covers both the coded area and each
-dimension. SPS, PPS and an IDR start each stream. A size change
-reactivates RDP, resets EGFX, creates and maps a new surface, and starts a new IDR.
-Display Control and pointer scaling use the same visible dimensions as RemoteFX.
-
-The server allows at most two unacknowledged frames. Cumulative acknowledgements
-release earlier frames. If the client suspends acknowledgements, the bounded capture
-queue and ten-frame-per-second limit pace delivery without retaining frame records.
-A two-second ACK or decode-progress stall, or an encoder error, resets the surface
-and encoder for a full refresh. A second failure uses the legacy codec for that connection.
-The connection and input remain active. A closed EGFX channel also uses the legacy
-path. Recovery cannot fix a client that closes the entire RDP connection.
-
-Startup logs `RDP H.264 available` with the encoder name. Each connection logs
-`RDP codec negotiated`, including the codec and reason. Legacy fallback logs use
-`RemoteFX/bitmap`; `RDP legacy codec available` gives the actual legacy codec.
-Connection logs include the peer address and session ID. Enable
-`RUST_LOG=info,wayshare::rdp=debug` for `CapsAdvertise`, `CapsConfirm`, EGFX frame IDs,
-ACKs and the client's decoded-frame count. FreeRDP can request this path with
-`/gfx:avc420`; use `/gfx:RFX` for AVC-disabled EGFX and `-gfx /rfx` for legacy RemoteFX.
-`RDP session summary` records the client and announced sizes, applied output mode,
-codec and reason. Display Control caps and every received PDU appear at debug.
-
-For an isolated loopback test, `WAYSHARE_TEST_RDP_FAIL_AFTER=20` injects one encoder
-failure after 20 AVC420 frames in each connection. Network listeners ignore this
-variable. It is unset in normal use.
-
-## Shared login
-
-Use the exact, case-sensitive username set by `wayshare setup` or `wayshare set-password`,
-and leave the RDP domain empty. The username need not be a Linux account. Both protocols
-load `srp_file` from the same config, defaulting to
-`$XDG_CONFIG_HOME/wayshare/srp-$USER` or `~/.config/wayshare/srp-$USER`.
-The file contains the username, salt, iteration count and SRP verifier. It contains no
-password. RDP derives a verifier from the submitted password and compares it with that
-same record. Changing the wayshare password changes both logins after restart.
-
-The development ARD path, configured by `dev.dh_username` and `dev.dh_password_file`,
-also shares its exact username and password checks with RDP. The password-file loader
-trims trailing CR and LF bytes. When both Apple methods are configured, either credential
-works. There is no PAM or keyring lookup. Linux account expiry and lockout policies do
-not apply. The former `rdp.allowed_user` key has been removed; remove it from old configs
-and use the Apple username in the client.
-
-Credentials must pass before capture updates or input start. Failed attempts wait at
-least two seconds. Password verification runs on blocking workers, and the delay affects
-only the failed connection. At most eight connections are admitted, with a 30-second
-login deadline. Submitted passwords are not saved or logged. Owned validation copies and
-decoded credentials are cleared after use, including cancellation. This does not
-guarantee that every temporary copy in process memory is erased.
-TLS remains required. There is no NLA, CredSSP or smart-card login. A client that requires
-NLA cannot connect.
-
-Connect with FreeRDP 3, using the configured Apple username and the password prompt:
-
-```sh
-xfreerdp3 /v:127.0.0.1:3389 /sec:tls /u:alice /from-stdin:force
-```
-
-Verify the server certificate before supplying a real password. Do not use `/cert:ignore`
-with a real password. A first connection over a trusted local path can establish trust;
-remote access needs a trusted certificate or a fingerprint checked through another path.
-
-## TLS identity
-
-On first use, wayshare creates a self-signed localhost ECDSA certificate and key in one
-PEM file, mode 0600. It reuses the identity on restart. The default path is
-`$XDG_CONFIG_HOME/wayshare/rdp-identity.pem`, or `~/.config/wayshare/rdp-identity.pem`.
-`identity_file` must be absolute. Invalid existing files cause an error and are not
-replaced. For remote access, supply a certificate and PKCS#8 key with the right hostnames
-or arrange explicit fingerprint verification.
-
-At startup, wayshare logs the actual bound socket address and the TLS certificate's
-SHA-256 fingerprint. A wildcard address such as `0.0.0.0` means all IPv4 interfaces;
-enter the server's LAN or Tailscale IP in the client. The fingerprint hashes the full
-DER certificate and uses 32 uppercase hex bytes separated by colons, for example
-`BA:78:16:BF:...`. Compare it with the SHA-256 fingerprint in FreeRDP's certificate
-prompt or the Microsoft client's certificate details. Letter case and separators can
-differ; the bytes must match. A SHA-1 thumbprint is a different hash and cannot be
-compared with this value. Do not accept a certificate whose SHA-256 fingerprint differs.
-
-You can check the same value locally without exposing the private key:
+Startup logs the bound address and the certificate's SHA-256 fingerprint as
+colon-separated hex bytes. Compare it with the client's SHA-256 certificate
+details before sending a password. A SHA-1 thumbprint cannot be compared with it.
+For remote access, supply a trusted certificate and PKCS#8 key with the right
+hostnames, or check the fingerprint through another trusted path.
 
 ```sh
 openssl x509 -in /absolute/path/rdp-identity.pem -noout -fingerprint -sha256
+xfreerdp3 /v:127.0.0.1:3389 /sec:tls /u:alice /from-stdin:force
 ```
 
-## Input and capture
+## Graphics
 
-Keyboard scancodes map to Linux evdev codes through the shared input sink and keyboard
-engine. PC modifiers bypass the Mac Command/Option remapping. Unicode input includes
-UTF-16 surrogate pairs. With Super, Ctrl or Alt held, Unicode Space uses the physical
-Space key on every layout. Printable US shortcut keys keep all held modifiers, including
-Shift. Plain Unicode typing keeps its text-entry behavior. Other printable shortcuts
-on non-US layouts still use the keysym path.
+`rdp.codec` accepts `"auto"`, `"h264"`, `"remotefx"` and `"egfx-remotefx"`.
+`"auto"` and `"h264"` prefer H.264/AVC420 over the Graphics Pipeline Extension,
+MS-RDPEGFX. Clients that disable AVC420 use EGFX Planar with top-down RGB tiles.
+Clients without EGFX use legacy RemoteFX or compressed bitmap updates.
+`"remotefx"` forces that legacy path. `"egfx-remotefx"` selects experimental
+CAVIDEO; it causes protocol errors in the iOS Windows App and is excluded from
+automatic selection.
 
-Absolute and relative pointer movement, five mouse buttons, and vertical and horizontal
-wheel deltas use the shared pointer engine and Wayland virtual devices. `[input] enabled = false` disables input for both protocols. Disconnect
-releases held keys and buttons. RFB and RDP share desktop focus, so concurrent input
-from viewers can interfere.
+The server selects the highest client EGFX version and preserves its flags.
+On Linux, H.264 tries VA-API Constrained Baseline on `/dev/dri/renderD128`, then
+OpenH264 in software. If neither works, the connection uses legacy graphics.
+These encoders are separate from Apple high-performance mode's HEVC encoder.
+Coded dimensions round up to multiples of 16; the visible region crops the padding.
+SPS, PPS and an IDR start each H.264 stream.
 
-Each authenticated connection owns a capture thread and a bounded frame queue. Capture
-submits changed full frames at up to ten frames per second. Frames and pointer coordinates
-use the negotiated client desktop size, including portrait sizes. The Wayland pointer
-maps that extent onto the output's logical size, so output scale needs no extra multiplier.
+The server keeps at most one unacknowledged frame. A two-second ACK or decode
+stall resets the surface and encoder for a full refresh. A second failure or a
+closed EGFX channel uses legacy graphics for that connection. The capture queue
+is bounded and runs at up to ten frames per second.
 
-Enable `resize = true` to fit the shared output to the client's requested pixel size.
-RDP uses the same display owner as RFB and restores the original mode on disconnect.
-Only one session can own output mode changes. The output keeps its current scale; mode
-sizes may round down to whole logical pixels. Frames scale from the applied mode to
-the requested desktop size. The same fitting also applies when resizing is disabled,
-fails, or another session owns the output.
+FreeRDP can request AVC420 with `/gfx:avc420`, Planar with
+`/gfx:AVC420:off,AVC444:off,RFX:off,progressive:off`, or legacy RemoteFX with
+`-gfx /rfx`. For an isolated loopback test,
+`WAYSHARE_TEST_RDP_FAIL_AFTER=20` injects one encoder failure after 20 AVC420
+frames. Network listeners ignore it.
 
-Display Control supports one primary monitor at the origin. Rotation requests can use
-portrait or landscape dimensions. Width must be even, and both dimensions must be
-between 200 and 8192 pixels, per
-[MS-RDPEDISP](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpedisp/ea2de591-9203-42cd-9908-be7a55237d1c).
-Dynamic layouts must also fit the advertised area of 8192 × 8192 pixels.
-The RDP desktop preserves the client's exact initial dimensions, including odd widths
-and heights. When the compositor rounds its mode, captured frames scale to the RDP
-extent. Pointer coordinates use that same extent and clamp to its edges. A Display
-Control resize announces the requested extent and rebuilds capture and the encoder.
-A client that repeats its original size in Confirm Active does not undo that resize.
-After 32 server reactivations, the session keeps its current extent and logs a warning.
+## Resizing and input
 
-Start with 1920x1080 or lower to limit CPU RemoteFX encoding work. The client must send
-a Display Control layout or reconnect with a new desktop size to change the resolution.
-Rotating a device can instead scale or crop the existing framebuffer locally.
-In a live rotation test, the iOS Windows App stopped reading its connection.
-No Display Control layout or disconnect appeared in the server log. The server closes a connection
-after five seconds without output progress so the app can reconnect at its new size.
-A new connection from the same IP replaces the old session. Suppress Output pauses
-graphics; resuming or requesting Refresh Rect redraws the current desktop.
-Legacy capture skips intermediate frames while the previous update or socket backlog
-is pending. Debug logs include `RDP client PDU`, `RDP client stalled; closing connection`
-and the new `RDP session summary` with the requested dimensions.
-With `RUST_LOG=info,wayshare::rdp=debug`, the server logs client capabilities, static and
-dynamic channel states, queued Display Control caps, layout requests and
-pointer extents. The caps allow one monitor with a maximum area of 8192 times 8192
-pixels. Each dimension also has an 8192-pixel limit.
+Enable top-level `resize = true` to fit the shared output to the client's pixel
+size. RDP shares display ownership with RFB and restores the original mode on
+disconnect. Only one session can own mode changes. Frames scale to the requested
+size when resizing is disabled, fails, or another session owns the mode.
+Pointer coordinates use that same extent, including odd initial desktop sizes.
 
-Microsoft's current [iOS display settings guide](https://learn.microsoft.com/en-us/windows-app/display-settings#display-settings)
-places resolution under the app-wide Settings > Display, shared across connections.
-On iPhone, enable Use Home Indicator Area to use the area reserved for the home indicator.
-On iPad, the corresponding setting is Use Full Display. The guide describes default
-letterboxing to protect rounded corners and system gestures. Per-PC display overrides,
-Match device and a dynamic-resolution toggle are unconfirmed on iOS. The guide documents
-similar controls on other platforms; their names and availability must not be assumed
-on iPhone. Try reconnecting after selecting a resolution, then test rotation both ways.
+Display Control advertises 16 monitors with area factors of 8192 by 8192. wayshare
+applies the primary monitor, or the first if none is marked, and logs the others.
+Layout widths must be even; both dimensions must be between 200 and 8192 pixels,
+per [MS-RDPEDISP](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpedisp/ea2de591-9203-42cd-9908-be7a55237d1c).
+The orientation log reports the client's rotation field, not the aspect ratio.
 
-Clipboard, sound and AVC444 remain unsupported.
-Microsoft clients on Windows, iOS, Android and macOS need separate interoperability tests.
+An EGFX size change deletes the known surface, sends ResetGraphics, recreates and
+maps surface 0, and restarts capture and the encoder on the same connection.
+Legacy resizing uses deactivation and reactivation with a five-second deadline.
+A repeated original size in Confirm Active does not undo the requested resize.
 
-## Dependencies
+Suppress Output pauses graphics while control traffic continues and capture
+retains dirty state. Layouts apply during suppression; resume sends a full fresh
+frame. Refresh Rect requests a redraw without clearing suppression. Suppression
+does not start a recovery probe or close timer. The five-second output watchdog
+closes clients that stop reading. A new connection from the same IP replaces the
+old session. Legacy capture coalesces frames while an update or socket backlog
+is pending.
 
-The server enables its optional EGFX support. Other optional codecs and helpers remain disabled.
-OpenH264 is built from source under its BSD license. Connector 0.10 unconditionally
-links `picky` and `sspi` with smart-card support. Cargo's additive features cannot remove
-that path. `deny.toml` therefore ignores only RUSTSEC-2023-0071 and RUSTSEC-2023-0089,
-with reasons for each. The RSA and smart-card paths are unused by this TLS listener.
-These exceptions do not establish that those dependencies are safe for other uses.
+Keyboard scancodes and Unicode input use the shared input sink. PC modifiers
+bypass Mac Command/Option remapping. Absolute and relative pointer movement, five
+buttons and both wheel axes use the shared pointer engine. Disconnect releases
+held keys and buttons. `[input] enabled = false` disables input for both protocols.
+Concurrent RFB and RDP viewers share desktop focus.
 
-The local server dependency patch clears credentials promptly, rejects missing initial
-credentials, and corrects pointer and Pause decoding. See its
-[patch notes](../vendor/ironrdp-server/README.md). `mise run check` covers the default
-build, `mise run check:no-rdp` covers the smaller build, and `mise run audit` checks both
-default and all features.
+## Diagnostics and dependencies
+
+Use `RUST_LOG=info,wayshare::rdp=debug` for client capabilities, DVC creation,
+EGFX frame ACKs and layouts. Info logs include Display Control caps, Save Session
+Info, suppression, surface resets and session summaries. No `WAYSHARE_RDP_*`
+environment variables are needed or supported.
+
+The handshake keeps negotiation flags `0x0b` when EGFX is enabled, Graphics first
+with DVC IDs starting at 1, and server core RDP 10.7. Server Monitor Layout PDUs
+use zero `pduSource` and inclusive bounds, only when the client requests them.
+These values do not enable NLA. The local
+[server](../vendor/ironrdp-server/README.md),
+[acceptor](../vendor/ironrdp-acceptor/README.md) and
+[DVC](../vendor/ironrdp-dvc/README.md) patches describe the changes.
+
+OpenH264 builds from source under its BSD license. Connector 0.10 unconditionally
+links `picky` and `sspi` with smart-card support. `deny.toml` ignores
+RUSTSEC-2023-0071 and RUSTSEC-2023-0089 for these unused RSA and smart-card paths.
+Those exceptions do not establish safety for other uses.
+
+Clipboard, sound and AVC444 are unsupported. The iPhone rotation result does not
+establish compatibility with every Microsoft client. `mise run check` covers the
+default build and `mise run check:no-rdp` covers the build without RDP.

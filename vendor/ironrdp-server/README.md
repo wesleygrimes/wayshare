@@ -17,11 +17,20 @@ Local changes:
   application RDP debug target. Log when Display Control caps enter the output queue.
 - Carry EGFX DVC output through the bounded display queue so frames, resets and legacy
   fallback remain ordered across reactivation. Log the available legacy codec at info.
-- Advertise one Display Control monitor with an area limit of 8192 by 8192,
+- Advertise 16 Display Control monitors by default with area factors of 8192 by 8192,
   and log every received Display Control PDU before decoding it.
+- Keep negotiation flags 0x0b with EGFX and create Graphics first with ids from 1.
+- Send Logon Info Version 2 once after activation and successful credential validation,
+  with the accepted username, empty domain and a process-local logon ID. Windows App
+  needs this notification before it sends live rotation layouts.
 - Queue bounded control replies separately from graphics completion so reads continue
   during a pending write. Close stalled writes after five seconds.
-- Honor Suppress Output, request full refreshes, and log client PDU types without payloads.
+- Honor Suppress Output and keep control traffic active. Resume requests a full frame.
+  Display Control layouts apply while suppressed. Suppression never starts a probe or
+  close timer. Each activation has a five-second deadline.
+- Carry surface lifecycle commands in the graphics queue, bypassing suppression.
+- Dispatch control PDUs during activation and retain virtual channels on the server.
+  Use the connector sequence API to keep activation and control processing separate.
 - Report the selected legacy codec to the display handler for session summaries.
 - Pad compressed bitmap scanlines to four pixels without enlarging their destination.
   Count cropped rows by their declared height, including the final partial stride.

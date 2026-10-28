@@ -792,6 +792,32 @@ mod tests {
     }
 
     #[test]
+    fn iphone_portrait_layout_preserves_zero_wire_orientation() {
+        // iPhone Windows App payload captured on 2026-10-28 after Save Session Info.
+        let bytes = [
+            2, 0, 0, 0, 56, 0, 0, 0, 40, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            68, 3, 0, 0, 44, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 100, 0, 0,
+            0,
+        ];
+        let ironrdp_displaycontrol::pdu::DisplayControlPdu::MonitorLayout(layout) =
+            ironrdp_core::decode(&bytes).unwrap()
+        else {
+            panic!("expected monitor layout");
+        };
+        assert_eq!(
+            layout_size(&layout).unwrap(),
+            DesktopSize {
+                width: 836,
+                height: 1580
+            }
+        );
+        assert_eq!(
+            layout.monitors()[0].orientation(),
+            Some(ironrdp_displaycontrol::pdu::MonitorOrientation::Landscape)
+        );
+    }
+
+    #[test]
     fn resize_validation_accepts_portrait_and_rejects_invalid_sizes_and_layouts() {
         for (width, height) in [
             (200, 200),

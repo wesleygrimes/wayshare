@@ -122,8 +122,9 @@ codec = "auto"
 ```
 
 `codec = "auto"` prefers H.264/AVC420 with hardware or software encoding.
-`"h264"` uses the same fallback rules. Clients that disable AVC420 use legacy
-RemoteFX or bitmap updates. `"remotefx"` forces the legacy codec path.
+`"h264"` uses the same fallback rules. Clients that disable AVC420 use EGFX
+Planar. Clients without EGFX use legacy RemoteFX or bitmap updates. `"remotefx"`
+forces the legacy codec path.
 `"egfx-remotefx"` opts into experimental RemoteFX over EGFX. It causes protocol
 errors in the iOS Windows App and is excluded from auto selection.
 

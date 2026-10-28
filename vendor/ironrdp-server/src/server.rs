@@ -1414,6 +1414,7 @@ impl RdpServer {
         W: FramedWrite,
     {
         debug!("Client accepted");
+        let username = result.credentials.as_ref().map(|creds| creds.username.clone()).unwrap_or_default();
 
         // Validate credentials if a validator is configured. The validator runs here, in the
         // async server layer, rather than in the sans-I/O acceptor, because real validators
@@ -1445,6 +1446,17 @@ impl RdpServer {
                     bail!("missing credentials");
                 }
             }
+        }
+
+        if !result.reactivation {
+            // Windows sends this after logon. Windows App gates live orientation
+            // changes through Display Control on this notification.
+            // IDs distinguish logons within this process; they are not reconnect cookies.
+            static NEXT_SESSION_ID: AtomicU32 = AtomicU32::new(1);
+            let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+            let data = save_session_info(result.io_channel_id, result.user_channel_id, &username, session_id)?;
+            writer.write_all(&data).await?;
+            info!(target: "wayshare::rdp", username, session_id, "RDP Save Session Info sent");
         }
 
         if !result.reactivation { self.static_channels = result.static_channels; }
@@ -1927,6 +1939,28 @@ impl RdpServer {
     }
 }
 
+fn save_session_info(io: u16, user: u16, username: &str, session_id: u32) -> Result<Vec<u8>> {
+    use rdp::session_info::{InfoData, InfoType, LogonInfo, LogonInfoVersion2, SaveSessionInfoPdu};
+
+    // MS-RDPBCGR 2.2.10.1: INFOTYPE_LOGON_LONG carries Logon Info Version 2.
+    let logon_info = LogonInfo { session_id, user_name: username.into(), domain_name: String::new() };
+    let header = rdp::headers::ShareControlHeader {
+        share_id: 0, pdu_source: io,
+        share_control_pdu: ShareControlPdu::Data(rdp::headers::ShareDataHeader {
+            share_data_pdu: rdp::headers::ShareDataPdu::SaveSessionInfo(SaveSessionInfoPdu {
+                info_type: InfoType::LogonLong,
+                info_data: InfoData::LogonInfoV2(LogonInfoVersion2 { logon_info }),
+            }),
+            stream_priority: rdp::headers::StreamPriority::Low,
+            compression_flags: rdp::headers::CompressionFlags::empty(),
+            compression_type: rdp::client_info::CompressionType::K8,
+        }),
+    };
+    Ok(encode_vec(&X224(SendDataIndication {
+        initiator_id: user, channel_id: io, user_data: encode_vec(&header)?.into(),
+    }))?)
+}
+
 /// Encode a server-initiated Auto-Detect Request PDU for the MCS message channel.
 ///
 /// The request is framed by a Basic Security Header (SEC_AUTODETECT_REQ) per
@@ -2131,5 +2165,98 @@ mod output_tests {
         assert_eq!(rx.recv().await.unwrap().bytes, b"reply");
         frame.done.unwrap().send(()).unwrap();
         write.await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod logon_tests {
+    use super::*;
+    use crate::display::RdpServerDisplayUpdates;
+    use ironrdp_pdu::rdp::session_info::{InfoData, InfoType};
+    use tokio::io::AsyncReadExt as _;
+
+    struct IdleDisplay;
+    #[async_trait::async_trait]
+    impl RdpServerDisplay for IdleDisplay {
+        async fn size(&mut self) -> DesktopSize { DesktopSize { width: 836, height: 1580 } }
+        async fn updates(&mut self) -> Result<Box<dyn RdpServerDisplayUpdates>> {
+            std::future::pending().await
+        }
+    }
+
+    struct Validator;
+    #[async_trait::async_trait]
+    impl CredentialValidator for Validator {
+        async fn validate(&self, creds: &Credentials) -> Result<CredentialDecision, CredentialValidationError> {
+            Ok(if creds.username == "rotation-proof" && creds.password == "test-only" {
+                CredentialDecision::Accept
+            } else {
+                CredentialDecision::Reject
+            })
+        }
+    }
+
+    async fn activate(username: Option<&str>, reactivation: bool) -> Vec<rdp::headers::ShareDataPdu> {
+        let mut server = RdpServer::builder().with_addr(([127,0,0,1],0))
+            .with_no_security().with_no_input().with_display_handler(IdleDisplay)
+            .with_credential_validator(Some(Arc::new(Validator))).build();
+        let result = AcceptorResult {
+            static_channels: Default::default(), capabilities: vec![], input_events: vec![],
+            user_channel_id: 1002, io_channel_id: 1003, message_channel_id: None,
+            reactivation, keyboard_layout: 0,
+            credentials: username.map(|name| Credentials {
+                username: name.into(), password: "test-only".into(), domain: None,
+            }),
+        };
+        let (stream, mut peer) = tokio::io::duplex(4096);
+        let (mut reader, mut writer) = split_tokio_framed(TokioFramed::new(stream));
+        let activation = server.client_accepted(&mut reader, &mut writer, result);
+        tokio::pin!(activation);
+        // Successful activation stays in its input loop. Rejects return after their error PDU.
+        tokio::select! {
+            result = &mut activation => assert!(result.is_err()),
+            _ = tokio::time::sleep(Duration::from_millis(20)) => (),
+        }
+        let mut bytes = vec![0; 4096];
+        let read = tokio::time::timeout(Duration::from_millis(20), peer.read(&mut bytes)).await;
+        let Ok(Ok(count)) = read else { return vec![]; };
+        bytes.truncate(count);
+        let packet = decode::<X224<SendDataIndication<'_>>>(&bytes).unwrap().0;
+        assert_eq!(packet.channel_id, 1003);
+        assert_eq!(packet.initiator_id, 1002);
+        let header = decode::<rdp::headers::ShareControlHeader>(&packet.user_data).unwrap();
+        let ShareControlPdu::Data(data) = header.share_control_pdu else { panic!("expected share data"); };
+        vec![data.share_data_pdu]
+    }
+
+    #[tokio::test]
+    async fn accepted_tls_identity_gets_long_logon_info_with_distinct_session_ids() {
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let pdus = activate(Some("rotation-proof"), false).await;
+            assert_eq!(pdus.len(), 1);
+            let rdp::headers::ShareDataPdu::SaveSessionInfo(info) = &pdus[0] else { panic!("expected logon notification"); };
+            assert_eq!(info.info_type, InfoType::LogonLong);
+            let InfoData::LogonInfoV2(info) = &info.info_data else { panic!("expected version 2"); };
+            assert_eq!(info.logon_info.user_name, "rotation-proof");
+            assert_eq!(info.logon_info.domain_name, "");
+            assert_ne!(info.logon_info.session_id, 0);
+            ids.push(info.logon_info.session_id);
+        }
+        assert_ne!(ids[0], ids[1]);
+    }
+
+    #[tokio::test]
+    async fn rejected_or_missing_credentials_do_not_get_logon_info() {
+        for username in [Some("wrong-user"), None] {
+            let pdus = activate(username, false).await;
+            assert_eq!(pdus.len(), 1);
+            assert!(matches!(pdus[0], rdp::headers::ShareDataPdu::ServerSetErrorInfo(_)));
+        }
+    }
+
+    #[tokio::test]
+    async fn reactivation_does_not_repeat_logon_info() {
+        assert!(activate(None, true).await.is_empty());
     }
 }
