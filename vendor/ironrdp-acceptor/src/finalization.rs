@@ -6,6 +6,11 @@ use tracing::debug;
 
 use crate::util::{self, wrap_share_data};
 
+// Credentials are checked after finalization. Allow small bursts of early input,
+// but bound unauthenticated retention to 256 packets and 1 MiB per connection.
+const MAX_INPUT_PACKETS: usize = 256;
+const MAX_INPUT_BYTES: usize = 1024 * 1024;
+
 #[derive(Debug)]
 pub struct FinalizationSequence {
     state: FinalizationState,
@@ -13,6 +18,7 @@ pub struct FinalizationSequence {
     io_channel_id: u16,
 
     input_events: Vec<Vec<u8>>,
+    input_bytes: usize,
 }
 
 #[derive(Default, Debug)]
@@ -112,6 +118,11 @@ impl Sequence for FinalizationSequence {
                 }
 
                 Err(()) => {
+                    if self.input_events.len() >= MAX_INPUT_PACKETS || input.len() > MAX_INPUT_BYTES - self.input_bytes
+                    {
+                        return Err(ConnectorError::general("pre-login input backlog limit exceeded"));
+                    }
+                    self.input_bytes += input.len();
                     self.input_events.push(input.to_vec());
 
                     (Written::Nothing, FinalizationState::WaitFontList)
@@ -187,6 +198,7 @@ impl FinalizationSequence {
             user_channel_id,
             io_channel_id,
             input_events: Vec::new(),
+            input_bytes: 0,
         }
     }
 
@@ -246,4 +258,73 @@ fn decode_font_list(input: &[u8]) -> Result<rdp::finalization_messages::FontPdu,
     };
 
     Ok(font_pdu)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn waiting_for_fonts() -> FinalizationSequence {
+        let mut sequence = FinalizationSequence::new(1001, 1003);
+        sequence.state = FinalizationState::WaitFontList;
+        sequence
+    }
+
+    #[test]
+    fn pre_login_input_rejects_64_mib_before_retaining_more_than_one_mib() {
+        let mut sequence = waiting_for_fonts();
+        let packet = vec![0; 32 * 1024];
+        let mut output = WriteBuf::new();
+        for index in 0..2048 {
+            let result = sequence.step(&packet, &mut output);
+            let retained: usize = sequence.input_events.iter().map(Vec::len).sum();
+            assert!(retained <= MAX_INPUT_BYTES);
+            if result.is_err() {
+                assert_eq!(index, 32);
+                assert_eq!(retained, MAX_INPUT_BYTES);
+                return;
+            }
+        }
+        panic!("the 64 MiB input burst must be rejected");
+    }
+
+    #[test]
+    fn pre_login_input_also_limits_packet_count() {
+        let mut sequence = waiting_for_fonts();
+        let mut output = WriteBuf::new();
+        for _ in 0..MAX_INPUT_PACKETS {
+            sequence.step(&[0], &mut output).unwrap();
+        }
+        assert!(sequence.step(&[0], &mut output).is_err());
+        assert_eq!(sequence.input_events.len(), MAX_INPUT_PACKETS);
+    }
+
+    #[test]
+    fn small_input_burst_finishes_and_preserves_packets() {
+        use ironrdp_core::encode_vec;
+        use std::borrow::Cow;
+
+        let mut sequence = waiting_for_fonts();
+        let mut output = WriteBuf::new();
+        let packets = vec![vec![0; 8], vec![1; 16]];
+        for packet in &packets {
+            sequence.step(packet, &mut output).unwrap();
+        }
+        let fonts = wrap_share_data(
+            rdp::headers::ShareDataPdu::FontList(rdp::finalization_messages::FontPdu::default()),
+            1001,
+        );
+        let fonts = encode_vec(&fonts).unwrap();
+        let packet = encode_vec(&X224(ironrdp_pdu::mcs::SendDataRequest {
+            initiator_id: 1001,
+            channel_id: 1003,
+            user_data: Cow::Borrowed(&fonts),
+        }))
+        .unwrap();
+        sequence.step(&packet, &mut output).unwrap();
+        while !sequence.is_done() {
+            sequence.step(&[], &mut output).unwrap();
+        }
+        assert_eq!(sequence.into_input_events(), packets);
+    }
 }
