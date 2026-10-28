@@ -38,7 +38,7 @@ struct ServeArgs {
     rdp: bool,
     #[arg(long)]
     no_rdp: bool,
-    /// RDP listen address. Defaults to 0.0.0.0:3389.
+    /// RDP listen address. Defaults to the Apple listen address on port 3389.
     #[arg(long)]
     rdp_listen: Option<SocketAddr>,
     /// PEM certificate and private key, generated if absent.
