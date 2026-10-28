@@ -1,111 +1,105 @@
 #!/usr/bin/env bash
-# Run inside archlinux:latest with /work read-only and /artifacts writable.
+# Session phases run inside the container; device discovery also runs on the runner.
 set -euo pipefail
+
+phase=${1:?pass prepare, start-hyprland, start-server, freerdp, collect, or --list-software-devices}
+session_dir=/tmp/ws
+artifacts=/artifacts
 
 drm_driver() {
   local device driver
   device=$(readlink -f "/sys/class/drm/$(basename "$1")/device")
   driver=$(basename "$(readlink -f "$device/driver")")
   # These modules use faux devices on recent kernels, without driver symlinks.
-  case $(basename "$device") in
-    vkms|vgem) driver=$(basename "$device") ;;
-  esac
+  case $(basename "$device") in vkms|vgem) driver=$(basename "$device") ;; esac
   printf '%s\n' "$driver"
 }
 
-if [[ ${1:-} == --list-software-devices ]]; then
+if [[ $phase == --list-software-devices ]]; then
   for node in /dev/dri/*; do
     [[ -c $node ]] || continue
-    case $(drm_driver "$node") in
-      vkms|vgem) printf '%s\n' "$node" ;;
-    esac
+    case $(drm_driver "$node") in vkms|vgem) printf '%s\n' "$node" ;; esac
   done
   exit 0
 fi
 
-if [[ ${1:-} != --session ]]; then
-  mkdir -p /artifacts
+if [[ $phase == prepare ]]; then
+  : "${DESKTOP_SESSION_USER:?}" "${DESKTOP_SESSION_SIZE:?}" "${DESKTOP_SESSION_PORT:?}"
+  [[ $DESKTOP_SESSION_SIZE =~ ^[0-9]+x[0-9]+$ ]]
   pacman -Syu --noconfirm --needed hyprland mesa mesa-utils libglvnd freerdp seatd \
     xorg-server-xvfb xorg-xdpyinfo imagemagick foot ttf-dejavu python python-pillow \
-    > /artifacts/packages.log 2>&1
-  useradd --create-home smoke
-  chown smoke:smoke /artifacts
-  pacman -Q > /artifacts/versions.log
-  seat_env=()
-  if [[ ${WAYSHARE_SOFTWARE_DRM:-false} == true ]]; then
-    chmod 755 /dev/dri
-    drm_cards=()
-    for node in /dev/dri/*; do
-      driver=$(drm_driver "$node")
-      case "$driver" in
-        vkms|vgem) ;;
-        *) echo "Unexpected DRM driver: $driver" >&2; exit 1 ;;
-      esac
-      chown smoke:smoke "$node"
-      if [[ $(basename "$node") == card* ]]; then
-        if [[ $driver == vgem ]]; then drm_cards=("$node" "${drm_cards[@]}"); else drm_cards+=("$node"); fi
-      fi
-    done
-    if [[ -c /dev/udmabuf ]]; then chown smoke:smoke /dev/udmabuf; fi
-    ls -ld /dev/dri /dev/dri/* > /artifacts/devices.log
-    SEATD_VTBOUND=0 seatd -u smoke > /artifacts/seatd.log 2>&1 &
-    for _ in {1..50}; do [[ -S /run/seatd.sock ]] && break; sleep 0.1; done
-    drm_list=$(IFS=:; echo "${drm_cards[*]}")
-    seat_env=(LIBSEAT_BACKEND=seatd "AQ_DRM_DEVICES=$drm_list")
-  elif [[ -e /dev/dri ]]; then
-    echo 'Unexpected /dev/dri; this test requires no GPU devices.' >&2
-    exit 1
-  else
-    echo 'No /dev/dri devices are available.' > /artifacts/devices.log
-  fi
-  exec runuser -u smoke -- env -i HOME=/home/smoke USER=smoke PATH=/usr/bin:/bin LANG=C.UTF-8 \
-    GITHUB_ACTIONS="${GITHUB_ACTIONS:-false}" \
-    LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
-    AQ_BACKENDS=headless AQ_NO_KMS_REQUIREMENT=1 HYPRLAND_NO_RT=1 \
-    "${seat_env[@]}" bash /work/tools/headless-smoke.sh --session
+    > "$artifacts/packages.log" 2>&1
+  useradd --create-home "$DESKTOP_SESSION_USER"
+  # Logs are shared by the runner user and the container user; secrets stay in /tmp/ws.
+  chmod 1777 "$artifacts"
+  install -d -m 700 -o "$DESKTOP_SESSION_USER" -g "$DESKTOP_SESSION_USER" \
+    "$session_dir" "$session_dir/r" "$session_dir/config" "$session_dir/cache"
+  install -m 600 -o "$DESKTOP_SESSION_USER" -g "$DESKTOP_SESSION_USER" \
+    /run/desktop-session-password "$session_dir/password"
+  pacman -Q > "$artifacts/versions.log"
+  chmod 755 /dev/dri
+  drm_cards=()
+  for node in /dev/dri/*; do
+    driver=$(drm_driver "$node")
+    case "$driver" in
+      vkms|vgem) ;;
+      *) echo "Unexpected DRM driver: $driver" >&2; exit 1 ;;
+    esac
+    chown "$DESKTOP_SESSION_USER:$DESKTOP_SESSION_USER" "$node"
+    if [[ $(basename "$node") == card* ]]; then drm_cards+=("$node"); fi
+  done
+  chown "$DESKTOP_SESSION_USER:$DESKTOP_SESSION_USER" /dev/udmabuf
+  ls -ld /dev/dri /dev/dri/* /dev/udmabuf > "$artifacts/devices.log"
+  nohup env SEATD_VTBOUND=0 seatd -u "$DESKTOP_SESSION_USER" \
+    > "$artifacts/seatd.log" 2>&1 < /dev/null &
+  for _ in {1..50}; do [[ -S /run/seatd.sock ]] && break; sleep 0.1; done
+  [[ -S /run/seatd.sock ]]
+  drm_list=$(IFS=:; echo "${drm_cards[*]}")
+  {
+    printf 'export DESKTOP_SESSION_USER=%q\n' "$DESKTOP_SESSION_USER"
+    printf 'export DESKTOP_SESSION_SIZE=%q\n' "$DESKTOP_SESSION_SIZE"
+    printf 'export DESKTOP_SESSION_PORT=%q\n' "$DESKTOP_SESSION_PORT"
+    printf 'export AQ_DRM_DEVICES=%q\n' "$drm_list"
+  } > "$session_dir/environment"
+  chmod 600 "$session_dir/environment"
+  chown "$DESKTOP_SESSION_USER:$DESKTOP_SESSION_USER" "$session_dir/environment"
+  exit 0
 fi
 
-umask 077
-ulimit -c 0
-# Hyprland includes its instance signature in Unix socket paths, limited to 108 bytes.
-session_dir=$(mktemp -d /tmp/ws.XXXXXX)
-export XDG_RUNTIME_DIR="$session_dir/r"
-export XDG_CONFIG_HOME="$session_dir/config"
-export XDG_CACHE_HOME="$session_dir/cache"
-mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
-export DISPLAY=:99
-export RUST_LOG=info,wayshare::rdp=debug
-binary=/work/target/debug/wayshare
-pids=()
-cleanup() {
-  for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
-  mkdir -p /artifacts/compositor
-  find "$XDG_RUNTIME_DIR" "$XDG_CACHE_HOME" -type f \
+if [[ $phase == collect ]]; then
+  mkdir -p "$artifacts/compositor"
+  find "$session_dir/r" "$session_dir/cache" -type f \
     \( -name '*log*' -o -name 'hyprlandCrashReport*.txt' \) \
-    -exec cp --backup=numbered '{}' /artifacts/compositor/ \; 2>/dev/null || true
-  rm -rf "$session_dir"
-  find /artifacts -user "$(id -u)" -exec chmod a+rX '{}' +
-}
-trap cleanup EXIT
+    -exec cp --backup=numbered '{}' "$artifacts/compositor/" \; 2>/dev/null || true
+  chmod -R a+rX "$artifacts"
+  exit 0
+fi
 
-eglinfo -B -p surfaceless > /artifacts/egl.log 2>&1 || true
-password=$(python -c 'import secrets; print(secrets.token_hex(24))')
-if [[ $GITHUB_ACTIONS == true ]]; then printf '::add-mask::%s\n' "$password"; fi
-printf '%s\n' "$password" > "$session_dir/password"
-unset password
-"$binary" set-password --user smoke --password-file "$session_dir/password" \
-  > /artifacts/setup.log 2>&1
+# shellcheck source=/dev/null
+source "$session_dir/environment"
+if [[ ${2:-} != --user ]]; then
+  exec runuser -u "$DESKTOP_SESSION_USER" -- env -i \
+    HOME="/home/$DESKTOP_SESSION_USER" USER="$DESKTOP_SESSION_USER" PATH=/usr/bin:/bin LANG=C.UTF-8 \
+    LIBSEAT_BACKEND=seatd LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
+    AQ_NO_KMS_REQUIREMENT=1 HYPRLAND_NO_RT=1 bash /work/tools/headless-smoke.sh "$phase" --user
+fi
 
-Xvfb "$DISPLAY" -screen 0 1024x768x24 -nolisten tcp > /artifacts/xvfb.log 2>&1 &
-pids+=("$!")
-for _ in {1..50}; do
-  if xdpyinfo > /dev/null 2>&1; then break; fi
-  sleep 0.1
-done
-xdpyinfo > /artifacts/xdisplay.log
+ulimit -c 0
+export XDG_RUNTIME_DIR="$session_dir/r" XDG_CONFIG_HOME="$session_dir/config" XDG_CACHE_HOME="$session_dir/cache"
+export DISPLAY=:99 RUST_LOG=info,wayshare::rdp=debug
+width=${DESKTOP_SESSION_SIZE%x*}
+height=${DESKTOP_SESSION_SIZE#*x}
+binary=/work/target/debug/wayshare
+if [[ -f $session_dir/wayland ]]; then
+  # shellcheck source=/dev/null
+  source "$session_dir/wayland"
+fi
 
-cat > "$session_dir/hyprland.lua" <<'CONF'
-hl.monitor({ output = "HEADLESS-1", mode = "800x600@30", position = "0x0", scale = 1 })
+case "$phase" in
+  start-hyprland)
+    eglinfo -B -p surfaceless > "$artifacts/egl.log" 2>&1 || true
+    cat > "$session_dir/hyprland.lua" <<CONF
+hl.monitor({ output = "HEADLESS-1", mode = "${width}x${height}@30", position = "0x0", scale = 1 })
 hl.monitor({ output = "Virtual-1", disabled = true })
 hl.monitor({ output = "Virtual-2", disabled = true })
 hl.config({ debug = { disable_logs = false, enable_stdout_logs = true } })
@@ -113,103 +107,73 @@ hl.on("hyprland.start", function()
     hl.exec_cmd("hyprctl output create headless HEADLESS-1")
 end)
 CONF
-Hyprland --config "$session_dir/hyprland.lua" > /artifacts/hyprland.log 2>&1 &
-hypr_pid=$!
-pids+=("$hypr_pid")
-hypr_ready=false
-for _ in {1..100}; do
-  if ! kill -0 "$hypr_pid" 2>/dev/null; then break; fi
-  instance=$(find "$XDG_RUNTIME_DIR/hypr" -name .socket.sock -print -quit 2>/dev/null || true)
-  if [[ -n $instance ]]; then
-    export HYPRLAND_INSTANCE_SIGNATURE
-    HYPRLAND_INSTANCE_SIGNATURE=$(basename "$(dirname "$instance")")
-    wayland_socket=$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'wayland-*' -print -quit)
-    if [[ -n $wayland_socket ]] && hyprctl -j monitors > /artifacts/monitors.json 2>&1; then
-      export WAYLAND_DISPLAY
-      WAYLAND_DISPLAY=$(basename "$wayland_socket")
-      hypr_ready=true
-      break
-    fi
-  fi
-  sleep 0.1
-done
-
-# The screenshot must contain the terminal's teal background, not just a client window.
-cat > "$session_dir/visible-client.sh" <<'CLIENT'
+    nohup Hyprland --config "$session_dir/hyprland.lua" > "$artifacts/hyprland.log" 2>&1 < /dev/null &
+    hypr_pid=$!
+    ready=false
+    for _ in {1..200}; do
+      kill -0 "$hypr_pid" 2>/dev/null || break
+      instance=$(find "$XDG_RUNTIME_DIR/hypr" -name .socket.sock -print -quit 2>/dev/null || true)
+      if [[ -n $instance ]]; then
+        export HYPRLAND_INSTANCE_SIGNATURE
+        HYPRLAND_INSTANCE_SIGNATURE=$(basename "$(dirname "$instance")")
+        wayland_socket=$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'wayland-*' -print -quit)
+        if [[ -n $wayland_socket ]] && hyprctl -j monitors > "$artifacts/monitors.json" 2>&1; then
+          export WAYLAND_DISPLAY
+          WAYLAND_DISPLAY=$(basename "$wayland_socket")
+          ready=true
+          break
+        fi
+      fi
+      sleep 0.1
+    done
+    [[ $ready == true ]]
+    {
+      printf 'export HYPRLAND_INSTANCE_SIGNATURE=%q\n' "$HYPRLAND_INSTANCE_SIGNATURE"
+      printf 'export WAYLAND_DISPLAY=%q\n' "$WAYLAND_DISPLAY"
+    } > "$session_dir/wayland"
+    hyprctl output create headless HEADLESS-1 > "$artifacts/output.log" 2>&1 || true
+    hyprctl -j monitors > "$artifacts/monitors.json"
+    cat > "$session_dir/visible-client.sh" <<'CLIENT'
 #!/usr/bin/env bash
 printf '\n\n  wayshare headless CI\n\n  This terminal came through Hyprland and RDP.\n'
 while true; do printf '\r  Frame time: %s  ' "$(date +%T)"; sleep 1; done
 CLIENT
-if [[ $hypr_ready == true ]]; then
-  hyprctl output create headless HEADLESS-1 > /artifacts/output.log 2>&1 || true
-  hyprctl -j monitors > /artifacts/monitors.json
-  foot --app-id=wayshare-smoke --override=colors-dark.background=164e63 \
-    --override=colors-dark.foreground=ffffff --font='DejaVu Sans Mono:size=18' \
-    bash "$session_dir/visible-client.sh" > /artifacts/foot.log 2>&1 &
-  pids+=("$!")
-  sleep 1
-  hyprctl -j clients > /artifacts/clients.json
-fi
-
-receive_frame() {
-  local mode=$1 port=$2 client_pid received=false
-  timeout 25s xfreerdp3 /v:"127.0.0.1:$port" /u:smoke /sec:tls \
-    /cert:ignore /from-stdin:force /size:800x600 /gfx:AVC420 -decorations \
-    < "$session_dir/password" > "/artifacts/freerdp-$mode.log" 2>&1 &
-  client_pid=$!
-  pids+=("$client_pid")
-  for _ in {1..15}; do
+    nohup foot --app-id=wayshare-smoke --override=colors-dark.background=164e63 \
+      --override=colors-dark.foreground=ffffff --font='DejaVu Sans Mono:size=18' \
+      bash "$session_dir/visible-client.sh" > "$artifacts/foot.log" 2>&1 < /dev/null &
     sleep 1
-    magick import -window root "/artifacts/received-$mode.png"
-    if python - "/artifacts/received-$mode.png" "$mode" <<'PY'
-import sys
-from PIL import Image
-
-image = Image.open(sys.argv[1]).convert("RGB")
-pixels = list(image.get_flattened_data())
-if sys.argv[2] == "hyprland":
-    matching = sum(max(abs(c - t) for c, t in zip(p, (22, 78, 99))) < 16 for p in pixels)
-    ok = matching > 10000
-else:
-    ok = len(set(pixels)) > 1000 and sum(max(p) - min(p) > 50 for p in pixels) > 10000
-sys.exit(0 if ok else 1)
-PY
-    then
-      if grep -q 'RDP EGFX frame ACK' "/artifacts/wayshare-$mode.log"; then
-        received=true
-        break
+    hyprctl -j clients > "$artifacts/clients.json"
+    ;;
+  start-server)
+    "$binary" set-password --user "$DESKTOP_SESSION_USER" --password-file "$session_dir/password" \
+      > "$artifacts/setup.log" 2>&1
+    nohup "$binary" --output HEADLESS-1 --listen 127.0.0.1:15900 \
+      --rdp-listen "0.0.0.0:$DESKTOP_SESSION_PORT" \
+      --no-mdns --no-hp --no-resize --no-exclusive \
+      > "$artifacts/wayshare.log" 2>&1 < /dev/null &
+    ;;
+  freerdp)
+    nohup Xvfb "$DISPLAY" -screen 0 "${width}x${height}x24" -nolisten tcp \
+      > "$artifacts/xvfb.log" 2>&1 < /dev/null &
+    for _ in {1..50}; do xdpyinfo > /dev/null 2>&1 && break; sleep 0.1; done
+    xdpyinfo > "$artifacts/xdisplay.log"
+    timeout 45s xfreerdp3 /v:"127.0.0.1:$DESKTOP_SESSION_PORT" /u:"$DESKTOP_SESSION_USER" /sec:tls \
+      /cert:ignore /from-stdin:force /size:"$DESKTOP_SESSION_SIZE" /gfx:AVC420 -decorations \
+      < "$session_dir/password" > "$artifacts/freerdp.log" 2>&1 &
+    client_pid=$!
+    trap 'kill "$client_pid" 2>/dev/null || true; wait "$client_pid" 2>/dev/null || true' EXIT
+    for _ in {1..30}; do
+      sleep 1
+      magick import -window root "$artifacts/received-freerdp.png"
+      if python /work/tools/check-desktop-frame.py "$artifacts/received-freerdp.png" "$DESKTOP_SESSION_SIZE" &&
+        grep -q 'RDP EGFX frame ACK' "$artifacts/wayshare.log"; then
+        echo 'FreeRDP desktop capture: PASS' | tee "$artifacts/result.txt"
+        exit 0
       fi
-    fi
-    if ! kill -0 "$client_pid" 2>/dev/null; then break; fi
-  done
-  kill "$client_pid" 2>/dev/null || true
-  wait "$client_pid" 2>/dev/null || true
-  [[ $received == true ]]
-}
-
-# Keep the real desktop result separate from the synthetic transport control.
-"$binary" --output HEADLESS-1 --listen 127.0.0.1:15900 --rdp-listen 127.0.0.1:13389 \
-  --no-mdns --no-hp --no-resize --no-exclusive \
-  > /artifacts/wayshare-hyprland.log 2>&1 &
-server_pid=$!
-pids+=("$server_pid")
-sleep 1
-desktop_result=FAIL
-if receive_frame hyprland 13389 && [[ $hypr_ready == true ]]; then desktop_result=PASS; fi
-kill "$server_pid" 2>/dev/null || true
-wait "$server_pid" 2>/dev/null || true
-
-"$binary" --test-pattern --listen 127.0.0.1:15901 --rdp-listen 127.0.0.1:13390 \
-  --no-mdns --no-hp --no-input --no-resize --no-exclusive \
-  > /artifacts/wayshare-pattern.log 2>&1 &
-server_pid=$!
-pids+=("$server_pid")
-sleep 1
-pattern_result=FAIL
-if receive_frame pattern 13390; then pattern_result=PASS; fi
-kill "$server_pid" 2>/dev/null || true
-wait "$server_pid" 2>/dev/null || true
-
-printf 'Hyprland desktop capture: %s\nRDP test-pattern control: %s\n' \
-  "$desktop_result" "$pattern_result" | tee /artifacts/result.txt
-[[ $desktop_result == PASS && $pattern_result == PASS ]]
+      kill -0 "$client_pid" 2>/dev/null || break
+    done
+    echo 'FreeRDP desktop capture: FAIL' | tee "$artifacts/result.txt"
+    exit 1
+    ;;
+  *) echo "Unknown session phase: $phase" >&2; exit 1 ;;
+esac
