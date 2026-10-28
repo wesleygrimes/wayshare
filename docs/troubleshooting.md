@@ -9,9 +9,10 @@ wayshare doctor
 journalctl --user -u wayshare -b
 ```
 
-Doctor checks the shared setup, the Apple listener and its firewall rule, and the
-Apple High Performance encoder. It does not check RDP. This is a known gap.
-For RDP, check the startup log for `RDP listener ready` or `RDP disabled`.
+Doctor checks the shared setup, the Apple listener and its firewall rule, the ufw
+rule for the RDP port, and the Apple High Performance encoder. It does not connect
+to the RDP listener. For that, check the startup log for `RDP listener ready` or
+`RDP disabled`.
 
 To follow the log during a connection attempt, run:
 

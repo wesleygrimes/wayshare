@@ -93,8 +93,8 @@ Resize requests still apply. Resuming output sends a fresh frame. An ACK or deco
 stall resets the graphics surface once before fallback to legacy graphics.
 On Linux, a client that stops reading output has a five-second watchdog.
 
-RDP has no clipboard or sound. `wayshare doctor` does not check RDP. This is a
-known gap. Startup and session logs appear in `journalctl --user -u wayshare`.
+RDP has no clipboard or sound. `wayshare doctor` checks the ufw rule for the RDP
+port. It does not connect to the RDP listener. Startup and session logs appear in `journalctl --user -u wayshare`.
 `RUST_LOG=info,wayshare::rdp=debug` adds client capabilities, channel creation,
 frame acknowledgements, and layout details. [Troubleshooting](troubleshooting.md#rdp)
 has steps for connection and graphics failures.

@@ -100,5 +100,5 @@ Setup offers ufw rules for TCP 5900 and the enabled RDP port, normally 3389.
 Existing installs need another setup run or a TCP 3389 rule for the LAN or VPN.
 Other firewalls need their own rules. RDP has no mDNS advertisement.
 
-`wayshare doctor` checks the Apple listener and its ufw rule. It does not check
-RDP connectivity, its certificate, or its firewall rule. This is a known gap.
+`wayshare doctor` checks the Apple listener, its ufw rule, and the ufw rule for
+the RDP port. It does not check RDP connectivity or the RDP certificate.

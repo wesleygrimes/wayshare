@@ -176,6 +176,26 @@ pub fn run() -> Result<bool> {
         ),
     }
 
+    if let Some(rdp_port) = rdp_firewall_port(&s) {
+        let rdp_bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == s.rdp.listen.ip());
+        let rdp_ip = rdp_bound.map(|a| a.ip).or_else(setup::lan_ipv4);
+        let rdp_hint = || setup::ufw_hint(rdp_port, rdp_bound, rdp_ip, &addrs);
+        match setup::firewall(rdp_port) {
+            Firewall::Off => r.ok("RDP firewall", "ufw is off"),
+            Firewall::Allows => r.ok("RDP firewall", &format!("ufw allows TCP {rdp_port}")),
+            Firewall::Blocks => r.warn(
+                "RDP firewall",
+                &format!("ufw has no rule for TCP {rdp_port}"),
+                &format!("for RDP clients on other machines: {}", rdp_hint()),
+            ),
+            Firewall::Unknown => r.warn(
+                "RDP firewall",
+                &format!("ufw is on; can't read its rules without root to check TCP {rdp_port}"),
+                &format!("if RDP clients can't connect: {}", rdp_hint()),
+            ),
+        }
+    }
+
     if !s.hp.enabled {
         r.ok("High Performance", "off in config");
     } else {
@@ -201,10 +221,42 @@ pub fn run() -> Result<bool> {
     Ok(r.failed == 0)
 }
 
+/// The RDP port whose ufw rule doctor checks, or `None` when RDP is off (including builds
+/// without the `rdp` feature, where it can't be enabled) or only listens on loopback.
+/// Matches the ports `wayshare setup` offers rules for.
+fn rdp_firewall_port(s: &Settings) -> Option<u16> {
+    (s.rdp.enabled && !s.rdp.listen.ip().is_loopback()).then(|| s.rdp.listen.port())
+}
+
 fn systemctl_query(verb: &str) -> String {
     Command::new("systemctl")
         .args(["--user", verb, "wayshare"])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rdp_firewall_port_follows_rdp_settings() {
+        let mut s = Settings::default();
+        s.rdp.enabled = true;
+        assert_eq!(rdp_firewall_port(&s), Some(3389));
+        s.rdp.listen = "192.168.1.50:3390".parse().unwrap();
+        assert_eq!(rdp_firewall_port(&s), Some(3390));
+        s.rdp.listen = "127.0.0.1:3389".parse().unwrap();
+        assert_eq!(rdp_firewall_port(&s), None);
+        s.rdp.listen = "0.0.0.0:3389".parse().unwrap();
+        s.rdp.enabled = false;
+        assert_eq!(rdp_firewall_port(&s), None);
+    }
+
+    #[test]
+    fn rdp_firewall_port_is_off_by_default_without_the_feature() {
+        let expected = cfg!(feature = "rdp").then_some(3389);
+        assert_eq!(rdp_firewall_port(&Settings::default()), expected);
+    }
 }
