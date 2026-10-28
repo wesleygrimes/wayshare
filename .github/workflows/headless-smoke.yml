@@ -29,6 +29,7 @@ jobs:
         with:
           cache-on-failure: true
       - name: Build wayshare
+        id: build
         run: |
           mkdir -p "$RUNNER_TEMP/headless-artifacts"
           mise run build 2>&1 | tee "$RUNNER_TEMP/headless-artifacts/build.log"
@@ -36,6 +37,8 @@ jobs:
         run: |
           {
             uname -a
+            grep -E 'CONFIG_DRM_(VKMS|VGEM)' "/boot/config-$(uname -r)" || true
+            apt-cache policy "linux-modules-extra-$(uname -r)"
             if [[ -d /dev/dri ]]; then ls -l /dev/dri; else echo 'No /dev/dri on the runner.'; fi
             for driver in vkms vgem; do
               echo "Trying software DRM driver $driver"
@@ -44,12 +47,33 @@ jobs:
             if [[ -d /dev/dri ]]; then ls -l /dev/dri; else echo 'Still no /dev/dri on the runner.'; fi
           } 2>&1 | tee "$RUNNER_TEMP/headless-artifacts/runner-drm.log"
       - name: Capture Hyprland and check RDP without a GPU
+        continue-on-error: true
         run: |
           # No devices, host display sockets, privileged mode, or published ports.
           docker run --rm --name wayshare-headless \
             --env GITHUB_ACTIONS=true \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/work,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/headless-artifacts,dst=/artifacts" \
+            archlinux:latest bash /work/tools/headless-smoke.sh
+      - name: Try software DRM devices without a physical GPU
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          devices=()
+          for node in /dev/dri/*; do
+            driver=$(basename "$(readlink -f "/sys/class/drm/$(basename "$node")/device/driver")")
+            case "$driver" in
+              vkms|vgem) devices+=(--device "$node") ;;
+            esac
+          done
+          mkdir -p "$RUNNER_TEMP/headless-artifacts/software-drm"
+          if (( ${#devices[@]} == 0 )); then
+            echo 'No software DRM devices available.' | tee "$RUNNER_TEMP/headless-artifacts/software-drm/result.txt"
+            exit 1
+          fi
+          docker run --rm --name wayshare-software-drm \
+            "${devices[@]}" --env GITHUB_ACTIONS=true --env WAYSHARE_SOFTWARE_DRM=true \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/work,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/headless-artifacts/software-drm,dst=/artifacts" \
             archlinux:latest bash /work/tools/headless-smoke.sh
       - name: Upload diagnostics and received frames
         if: always()

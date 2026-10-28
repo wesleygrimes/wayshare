@@ -4,22 +4,42 @@ set -euo pipefail
 
 if [[ ${1:-} != --session ]]; then
   mkdir -p /artifacts
-  pacman -Syu --noconfirm --needed hyprland mesa mesa-utils libglvnd freerdp \
+  pacman -Syu --noconfirm --needed hyprland mesa mesa-utils libglvnd freerdp seatd \
     xorg-server-xvfb xorg-xdpyinfo imagemagick foot ttf-dejavu python python-pillow \
     > /artifacts/packages.log 2>&1
   useradd --create-home smoke
   chown smoke:smoke /artifacts
   pacman -Q > /artifacts/versions.log
-  if [[ -e /dev/dri ]]; then
+  seat_env=()
+  if [[ ${WAYSHARE_SOFTWARE_DRM:-false} == true ]]; then
+    drm_cards=()
+    for node in /dev/dri/*; do
+      driver=$(basename "$(readlink -f "/sys/class/drm/$(basename "$node")/device/driver")")
+      case "$driver" in
+        vkms|vgem) ;;
+        *) echo "Unexpected DRM driver: $driver" >&2; exit 1 ;;
+      esac
+      chown smoke:smoke "$node"
+      if [[ $(basename "$node") == card* ]]; then
+        if [[ $driver == vgem ]]; then drm_cards=("$node" "${drm_cards[@]}"); else drm_cards+=("$node"); fi
+      fi
+    done
+    ls -l /dev/dri > /artifacts/devices.log
+    SEATD_VTBOUND=0 seatd -u smoke > /artifacts/seatd.log 2>&1 &
+    for _ in {1..50}; do [[ -S /run/seatd.sock ]] && break; sleep 0.1; done
+    drm_list=$(IFS=:; echo "${drm_cards[*]}")
+    seat_env=(LIBSEAT_BACKEND=seatd "AQ_DRM_DEVICES=$drm_list")
+  elif [[ -e /dev/dri ]]; then
     echo 'Unexpected /dev/dri; this test requires no GPU devices.' >&2
     exit 1
+  else
+    echo 'No /dev/dri devices are available.' > /artifacts/devices.log
   fi
-  echo 'No /dev/dri devices are available.' > /artifacts/devices.log
   exec runuser -u smoke -- env -i HOME=/home/smoke USER=smoke PATH=/usr/bin:/bin \
     GITHUB_ACTIONS="${GITHUB_ACTIONS:-false}" \
     LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
     AQ_BACKENDS=headless AQ_NO_KMS_REQUIREMENT=1 HYPRLAND_NO_RT=1 \
-    bash /work/tools/headless-smoke.sh --session
+    "${seat_env[@]}" bash /work/tools/headless-smoke.sh --session
 fi
 
 umask 077
@@ -41,7 +61,7 @@ cleanup() {
     \( -name '*log*' -o -name 'hyprlandCrashReport*.txt' \) \
     -exec cp --backup=numbered '{}' /artifacts/compositor/ \; 2>/dev/null || true
   rm -rf "$session_dir"
-  chmod -R a+rX /artifacts
+  find /artifacts -user "$(id -u)" -exec chmod a+rX '{}' +
 }
 trap cleanup EXIT
 
