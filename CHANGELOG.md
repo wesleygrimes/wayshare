@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0 - 2026-10-28
+
+wayshare now works with RDP clients as well as Mac Screen Sharing.
+
+### Upgrade notes
+
+- RDP is on by default. It listens on port 3389 at the Apple listen address, so `0.0.0.0:3389` on a fresh install. Set `[rdp] listen` to use another address.
+- To turn RDP off, set `[rdp] enabled = false` in the config or start wayshare with `--no-rdp`.
+- If you use ufw, allow TCP 3389 or rerun setup so other machines can reach RDP.
+
+### Features
+
+- **rdp:** add an RDP server built on IronRDP. It shares the desktop with keyboard and pointer input, and resizes the desktop when the client window changes size or an iPhone rotates. Closes [#55](https://github.com/wesleygrimes/wayshare/issues/55). ([#74](https://github.com/wesleygrimes/wayshare/pull/74))
+- **rdp:** RDP logs in over TLS with the same username and password as Apple mode. ([#74](https://github.com/wesleygrimes/wayshare/pull/74))
+- **rdp:** tested with Windows App on iPhone, iPad and Mac, Windows Remote Desktop Connection (mstsc), and FreeRDP. ([#75](https://github.com/wesleygrimes/wayshare/pull/75))
+- **doctor:** warn when RDP listens on a network address and ufw has no rule for its port. ([#75](https://github.com/wesleygrimes/wayshare/pull/75), [#76](https://github.com/wesleygrimes/wayshare/pull/76))
+
+### Fixes
+
+- **hp:** a VA-API bitrate overshoot no longer ends a High Performance stream. wayshare keeps the frame and logs one warning. ([#76](https://github.com/wesleygrimes/wayshare/pull/76))
+- setup and doctor recognize more kinds of ufw rules, such as port ranges, `limit`, app profiles and subnet rules, and respect rule order. ([#76](https://github.com/wesleygrimes/wayshare/pull/76))
+- **build:** `tools/check-system-deps.sh` now lists `gcc-c++` on Fedora, which OpenH264 needs.
+
+### Documentation
+
+- reorganize the docs for both protocols, with a "Connect from" table in the README and a quickstart for each client under docs/connect/ ([#75](https://github.com/wesleygrimes/wayshare/pull/75))
+
+**Full changelog**: [v0.2.4...v0.3.0](https://github.com/wesleygrimes/wayshare/compare/v0.2.4...v0.3.0)
+
 ## 0.2.4 - 2026-10-25
 
 ### Fixes
