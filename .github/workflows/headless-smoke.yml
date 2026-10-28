@@ -31,7 +31,7 @@ jobs:
       - name: Build wayshare
         id: build
         run: |
-          mkdir -p "$RUNNER_TEMP/headless-artifacts"
+          mkdir -p "$RUNNER_TEMP/headless-artifacts/software-drm"
           mise run build 2>&1 | tee "$RUNNER_TEMP/headless-artifacts/build.log"
       - name: Check software DRM support on the runner
         run: |
@@ -59,12 +59,8 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           devices=()
-          for node in /dev/dri/*; do
-            driver=$(basename "$(readlink -f "/sys/class/drm/$(basename "$node")/device/driver")")
-            case "$driver" in
-              vkms|vgem) devices+=(--device "$node") ;;
-            esac
-          done
+          while IFS= read -r node; do devices+=(--device "$node"); done \
+            < <(bash "$GITHUB_WORKSPACE/tools/headless-smoke.sh" --list-software-devices)
           mkdir -p "$RUNNER_TEMP/headless-artifacts/software-drm"
           if (( ${#devices[@]} == 0 )); then
             echo 'No software DRM devices available.' | tee "$RUNNER_TEMP/headless-artifacts/software-drm/result.txt"

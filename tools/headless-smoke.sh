@@ -2,6 +2,25 @@
 # Run inside archlinux:latest with /work read-only and /artifacts writable.
 set -euo pipefail
 
+drm_driver() {
+  local device driver
+  device=$(readlink -f "/sys/class/drm/$(basename "$1")/device")
+  driver=$(basename "$(readlink -f "$device/driver")")
+  # VGEM uses a faux device on recent kernels, without a driver symlink.
+  if [[ $(basename "$device") == vgem ]]; then driver=vgem; fi
+  printf '%s\n' "$driver"
+}
+
+if [[ ${1:-} == --list-software-devices ]]; then
+  for node in /dev/dri/*; do
+    [[ -c $node ]] || continue
+    case $(drm_driver "$node") in
+      vkms|vgem) printf '%s\n' "$node" ;;
+    esac
+  done
+  exit 0
+fi
+
 if [[ ${1:-} != --session ]]; then
   mkdir -p /artifacts
   pacman -Syu --noconfirm --needed hyprland mesa mesa-utils libglvnd freerdp seatd \
@@ -14,7 +33,7 @@ if [[ ${1:-} != --session ]]; then
   if [[ ${WAYSHARE_SOFTWARE_DRM:-false} == true ]]; then
     drm_cards=()
     for node in /dev/dri/*; do
-      driver=$(basename "$(readlink -f "/sys/class/drm/$(basename "$node")/device/driver")")
+      driver=$(drm_driver "$node")
       case "$driver" in
         vkms|vgem) ;;
         *) echo "Unexpected DRM driver: $driver" >&2; exit 1 ;;
