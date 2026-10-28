@@ -1,12 +1,23 @@
 # wayshare
 
-Share your Hyprland desktop with your Mac.
+Share your Hyprland desktop with a Mac's Screen Sharing app or RDP clients like
+Windows App and FreeRDP.
 
-Connect through the Mac's built-in Screen Sharing app. Nothing to install on macOS.
+## Connect from
 
-- Use your Hyprland and Omarchy shortcuts. Command sends Super.
-- Copy and paste text, rich text, and images between machines.
-- Use High Performance mode for low-latency video and sound.
+| Client | Quickstart |
+|---|---|
+| Mac Screen Sharing | [Connect from your Mac](docs/connect/mac.md) |
+| Windows App on iPhone, iPad, or Mac | [Connect with Windows App](docs/connect/windows-app.md) |
+| Windows Remote Desktop Connection (mstsc) | [Connect with mstsc](docs/connect/windows-app.md) |
+| FreeRDP | [Connect with FreeRDP](docs/connect/freerdp.md) |
+
+- Use your Hyprland and Omarchy shortcuts.
+- On the Mac, copy text, rich text, and images. Use High Performance for video and sound.
+- On RDP, use H.264 or Planar graphics. Live resize and rotation work on iPhone.
+
+RDP is on by default at `0.0.0.0:3389`. See the [tested clients](docs/clients.md)
+for each client's verified behavior.
 
 <img src="docs/media/screenshot.jpg" alt="An Omarchy desktop open in the Mac's Screen Sharing app" width="720">
 
@@ -49,9 +60,9 @@ If you use [mise](https://mise.jdx.dev), run:
 mise use -g github:wesleygrimes/wayshare
 ```
 
-To build it yourself, see [Build from source](docs/development.md#installing-from-source).
+To build it yourself, see [Build from source](docs/development.md#install-from-source).
 
-## Configure
+## Set up
 
 Run this in a terminal inside your Hyprland session:
 
@@ -59,43 +70,32 @@ Run this in a terminal inside your Hyprland session:
 wayshare setup
 ```
 
-Choose a password, the monitor to share, and the network to accept connections on.
-Setup saves your choices, starts wayshare, and displays the address and username for
-your Mac.
+Choose a password, the monitor to share, and the network for Apple Screen Sharing.
+Setup saves your choices, starts wayshare, and displays the address and username.
+Both protocols use that username and password. Setup offers ufw rules for TCP 5900
+and 3389. On an existing install, rerun setup or open TCP 3389 to your LAN or VPN.
 
-Default builds also accept [RDP](docs/rdp.md) on all IPv4 interfaces at TCP 3389,
-using TLS and the same username and password. Set `[rdp] enabled = false` to turn
-it off, or build with `--no-default-features` to omit it. The network choice in
-setup controls Apple RFB; configure `rdp.listen` separately to restrict RDP.
+The network choice controls Apple Screen Sharing. RDP listens on all IPv4
+interfaces by default. See [Security](docs/security.md) to restrict both protocols
+to your VPN.
 
-If ufw blocks a connection, setup offers rules for TCP 5900 and the enabled RDP
-port using sudo. Existing setups must rerun setup or allow TCP 3389 themselves.
+Run `wayshare setup` again to change your choices. For
+[other settings](docs/configuration.md), edit `~/.config/wayshare/config.toml`, then run
+`wayshare restart`.
 
-Run `wayshare setup` again to change these choices. For
-[other settings](docs/configuration.md), edit `~/.config/wayshare/config.toml`, then run:
+## Connect
 
-```sh
-wayshare restart
-```
+On a Mac, open Screen Sharing and connect to the address from setup. Sign in with
+the username from setup and your wayshare password. Follow the
+[Mac quickstart](docs/connect/mac.md) for High Performance mode.
 
-## Connect from your Mac
-
-1. Open **Screen Sharing**.
-2. Choose **Connection → New** and enter the address shown by setup.
-3. Sign in with the username shown by setup and the password you chose.
-4. Select **High Performance** when prompted.
+In an RDP client, use your Hyprland machine's address and port 3389. Use the same
+username, with an empty domain. Check the certificate's SHA-256 fingerprint before
+you send your password. Follow the [Windows App and mstsc](docs/connect/windows-app.md)
+or [FreeRDP](docs/connect/freerdp.md) quickstart.
 
 For connection or startup problems, run `wayshare doctor` and see
-[Troubleshooting](docs/troubleshooting.md).
-
-## Documentation
-
-- [Configuration](docs/configuration.md): display, keyboard, network, and other settings
-- [High Performance mode](docs/high-performance.md): encoders and audio requirements
-- [Security](docs/security.md): encryption, ports, and VPN access
-- [Troubleshooting](docs/troubleshooting.md): connection problems, startup, and logs
-- [Packaging](docs/packaging.md): install layout and dependencies
-- [Development](docs/development.md): building and testing
+[Troubleshooting](docs/troubleshooting.md). Doctor does not check RDP.
 
 ## Commands
 
@@ -132,9 +132,27 @@ With mise, run `wayshare uninstall` before `mise uninstall`.
 
 On Omarchy, run `wayshare uninstall`, then `omarchy pkg drop wayshare`.
 
+## Documentation
+
+- [Client compatibility](docs/clients.md)
+- [Configuration](docs/configuration.md)
+- [High Performance mode](docs/high-performance.md)
+- [RDP](docs/rdp.md)
+- [Security](docs/security.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Packaging](docs/packaging.md)
+- [Development](docs/development.md)
+
 ## Contributors
 
 Thanks to these people ([emoji key](https://allcontributors.org/docs/en/emoji-key)):
+
+<a id="maintenance-wesleygrimes"></a>
+<a id="ideas-andresark"></a>
+<a id="userTesting-kitknox"></a>
+<a id="ideas-ernestodisa"></a>
+<a id="userTesting-thebytorsnowdog"></a>
+<a id="platform-3j27"></a>
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <!-- prettier-ignore-start -->

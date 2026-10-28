@@ -19,7 +19,7 @@ resize = true            # match the viewer's size, restore the monitor afterwar
 ```
 
 `wayshare setup` picks `output` and `listen` for you. To listen only over Tailscale, see
-[Security](security.md#only-accept-connections-over-tailscale).
+[Security](security.md#vpn-access).
 
 With `resize` on, wayshare switches the shared monitor to the size the RFB or RDP viewer
 requests and restores it on disconnect. One session owns mode changes at a time. RDP
@@ -110,34 +110,7 @@ enabled = true
 
 ## RDP
 
-Default builds include RDP with TLS, the Apple mode username and password, and input.
-The listener defaults to `0.0.0.0:3389` on all IPv4 interfaces.
-
-```toml
-[rdp]
-enabled = true
-listen = "0.0.0.0:3389"
-codec = "auto"
-# identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
-```
-
-`codec = "auto"` prefers H.264/AVC420 with hardware or software encoding.
-`"h264"` uses the same fallback rules. Clients that disable AVC420 use EGFX
-Planar. Clients without EGFX use legacy RemoteFX or bitmap updates. `"remotefx"`
-forces the legacy codec path.
-`"egfx-remotefx"` opts into experimental RemoteFX over EGFX. It causes protocol
-errors in the iOS Windows App and is excluded from auto selection.
-
-Set `[rdp] enabled = false` or pass `--no-rdp` to turn it off. Choose one LAN or
-Tailscale address to restrict RDP. Top-level `listen` only controls Apple RFB.
-A missing or unreadable SRP record or unusable TLS identity disables RDP with a
-repair message. Apple RFB keeps listening. Run `wayshare set-password` for SRP
-errors, or fix `identity_file` and its directory permissions for TLS errors.
-Use the exact Apple mode username and an empty domain.
-Startup logs the bound address and certificate SHA-256 fingerprint as colon-separated hex bytes. Compare it with the client's SHA-256
-certificate details before sending a password. Setup offers ufw rules for TCP 5900
-and the enabled RDP port. Existing setups must rerun setup or allow TCP 3389
-themselves, only from the LAN or VPN.
-See [RDP](rdp.md) for shared credentials, username policy and limitations, including
-client-size capture and Display Control resizing. `--no-default-features` omits RDP from
-the build.
+Default builds enable RDP on `0.0.0.0:3389`. The `[rdp]` settings are `enabled`,
+`listen`, `codec`, and `identity_file`. Top-level `listen` controls Apple Screen
+Sharing only. See the [RDP settings reference](rdp.md#settings) for defaults,
+accepted values, and command-line overrides.

@@ -17,9 +17,19 @@ body:
     validations:
       required: true
   - type: input
-    id: macos-version
+    id: client-version
     attributes:
-      label: macOS version
+      label: Client and version
+      description: For example, macOS 15.5 Screen Sharing or Windows App 11.1 on iPhone.
+    validations:
+      required: true
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Protocol
+      options:
+        - Apple Screen Sharing
+        - RDP
     validations:
       required: true
   - type: input

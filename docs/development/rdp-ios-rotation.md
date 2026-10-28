@@ -10,7 +10,7 @@ Save Session Info probe enabled. It did not need NLA or auto-detect. Auto-detect
 caused phone error `0x1304`. The early-flags and General/Surface capability probes
 did not enable rotation.
 
-wayshare now sends the notification once after activation and credential
+wayshare sends the notification once after activation and credential
 validation, before starting the virtual channels. It uses
 [Logon Info Version 2](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/a2e946b4-820c-4d11-b4c9-8029a7df558f),
 `INFOTYPE_LOGON_LONG = 0x00000001`, with the accepted username, an empty domain and
