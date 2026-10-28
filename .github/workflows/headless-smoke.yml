@@ -1,0 +1,48 @@
+name: Headless smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [wes/headless-ci-smoke]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: headless-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  headless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MISE_DISABLE_TOOLS: cargo:bindgen-cli
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libegl-dev libgbm-dev
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build wayshare
+        run: |
+          mkdir -p "$RUNNER_TEMP/headless-artifacts"
+          mise run build 2>&1 | tee "$RUNNER_TEMP/headless-artifacts/build.log"
+      - name: Capture Hyprland and check RDP without a GPU
+        run: |
+          # No devices, host display sockets, privileged mode, or published ports.
+          docker run --rm --name wayshare-headless \
+            --env GITHUB_ACTIONS=true \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/work,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/headless-artifacts,dst=/artifacts" \
+            archlinux:latest bash /work/tools/headless-smoke.sh
+      - name: Upload diagnostics and received frames
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: headless-smoke-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/headless-artifacts
+          if-no-files-found: warn
+          retention-days: 14
