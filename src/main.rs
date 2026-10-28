@@ -16,7 +16,7 @@ use wayshare::rfb::{self, AuthConfig, Config};
 #[derive(Parser)]
 #[command(
     version,
-    about = "Screen Sharing server for the stock macOS client",
+    about = "Share your Hyprland desktop with Apple Screen Sharing and RDP clients",
     args_conflicts_with_subcommands = true
 )]
 struct Cli {
@@ -38,7 +38,7 @@ struct ServeArgs {
     rdp: bool,
     #[arg(long)]
     no_rdp: bool,
-    /// RDP listen address. Defaults to loopback.
+    /// RDP listen address. Defaults to 0.0.0.0:3389.
     #[arg(long)]
     rdp_listen: Option<SocketAddr>,
     /// PEM certificate and private key, generated if absent.
