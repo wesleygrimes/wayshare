@@ -4,7 +4,7 @@ set -euo pipefail
 
 if [[ ${1:-} != --session ]]; then
   mkdir -p /artifacts
-  pacman -Syu --noconfirm --needed hyprland mesa libglvnd freerdp \
+  pacman -Syu --noconfirm --needed hyprland mesa mesa-utils libglvnd freerdp \
     xorg-server-xvfb xorg-xdpyinfo imagemagick foot ttf-dejavu python python-pillow \
     > /artifacts/packages.log 2>&1
   useradd --create-home smoke
@@ -45,6 +45,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
+eglinfo -B -p surfaceless > /artifacts/egl.log 2>&1 || true
 password=$(python -c 'import secrets; print(secrets.token_hex(24))')
 if [[ $GITHUB_ACTIONS == true ]]; then printf '::add-mask::%s\n' "$password"; fi
 printf '%s\n' "$password" > "$session_dir/password"
