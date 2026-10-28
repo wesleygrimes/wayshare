@@ -21,7 +21,11 @@ Rust 1.89 or newer ([rustup](https://rustup.rs) or your distro's package), a C l
 Default builds also need a C++ compiler for the OpenH264 software fallback.
 `--no-default-features` omits RDP and OpenH264.
 
-## Installing from source
+`libz-sys` uses system zlib when available and builds a bundled copy otherwise.
+The optional development packages are `zlib` on Arch, `zlib1g-dev` on Debian and
+Ubuntu, and `zlib-devel` on Fedora.
+
+## Install from source
 
 ```sh
 cargo install --locked --path .
@@ -54,7 +58,7 @@ missing Linux system packages but never uses sudo.
 | `mise run release <version> [--dry-run] [--tag]` | prepare a release PR, or tag it; see [releasing.md](releasing.md) |
 | `mise run gen-vaapi-sys` | regenerate the libva bindings (Linux) |
 
-`mise run build` is now a dev build; pass `--release` for an optimized build.
+`mise run build` uses the dev profile. Pass `--release` for an optimized build.
 
 `audit` downloads the advisory database, so it needs network. `gen-vaapi-sys` needs libva
 headers and clang. Normal checks do not need a live Hyprland session.
@@ -120,3 +124,71 @@ than editing it.
 Code is formatted with rustfmt (default config). Run `cargo fmt` before committing;
 `cargo fmt --check` verifies. The generated `src/encode/vaapi/sys.rs` is excluded; regenerate
 it rather than formatting it.
+
+## RDP implementation
+
+Default builds enable the `rdp` Cargo feature. See [Packaging](packaging.md#build)
+for OpenH264 build requirements.
+
+### Login and session identity
+
+Credentials must pass before capture or input starts. Password verification runs
+on blocking workers. Submitted passwords are not saved or logged. Validation
+copies and decoded credentials are cleared after use, including cancellation.
+This does not erase every temporary memory copy. Development ARD credentials
+also work when configured, but RDP startup still requires a readable SRP record.
+
+After activation and successful login, wayshare sends Save Session Info once,
+with Logon Info Version 2, the accepted username, and an empty domain. A
+process-wide counter assigns the 32-bit session ID. It resets on restart and
+is not a reconnect cookie. The log line `RDP Save Session Info sent` contains
+`username` and `session_id`. The
+[iPhone rotation finding](development/rdp-ios-rotation.md) records why the client
+needs that notification.
+
+### Graphics and resize
+
+The server selects the highest client EGFX version and preserves its flags.
+H.264 tries VA-API Constrained Baseline on `/dev/dri/renderD128`, then OpenH264.
+Coded dimensions round up to multiples of 16. The visible region crops the
+padding. SPS, PPS, and an IDR start each H.264 stream. EGFX Planar uses top-down
+RGB tiles.
+
+The server keeps at most one unacknowledged frame. A two-second ACK or decode
+stall resets the surface and encoder for a full refresh. A second failure or a
+closed EGFX channel uses legacy graphics. The capture queue is bounded. For an
+isolated loopback test, `WAYSHARE_TEST_RDP_FAIL_AFTER=20` injects one encoder
+failure after 20 AVC420 frames. Network listeners ignore it.
+
+Display Control advertises 16 monitors with area factors of 8192 by 8192, per
+[MS-RDPEDISP](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpedisp/ea2de591-9203-42cd-9908-be7a55237d1c).
+The server applies the primary monitor, or the first if none is marked, and logs
+the others. The orientation field reports the client's rotation angle, not its
+aspect ratio.
+
+An EGFX resize deletes the known surface, sends ResetGraphics, recreates and
+maps surface 0, and restarts capture and encoding on the same connection.
+Legacy resizing uses deactivation and reactivation with a five-second deadline.
+A repeated original size in Confirm Active does not undo the requested resize.
+Pointer coordinates use the client extent, including odd initial desktop sizes.
+
+Suppress Output pauses graphics but retains capture dirty state and control
+traffic. Layouts apply during suppression. Resume sends a full fresh frame.
+Refresh Rect requests a redraw without clearing suppression. Suppression does
+not start a recovery probe or close timer. Legacy capture coalesces frames while
+an update or socket backlog is pending.
+
+### Local protocol patches
+
+The handshake keeps negotiation flags `0x0b` with EGFX enabled, Graphics first
+with DVC IDs starting at 1, and server core RDP 10.7. Server Monitor Layout PDUs
+use zero `pduSource` and inclusive bounds, only when the client requests them.
+These values do not enable NLA. The local
+[server](../vendor/ironrdp-server/README.md),
+[acceptor](../vendor/ironrdp-acceptor/README.md), and
+[DVC](../vendor/ironrdp-dvc/README.md) notes describe the patches.
+
+Connector 0.10 unconditionally links `picky` and `sspi` with smart-card support.
+`deny.toml` ignores RUSTSEC-2023-0071 and RUSTSEC-2023-0089 for these unused RSA
+and smart-card paths. Those exceptions do not establish safety for other uses.
+No `WAYSHARE_RDP_*` environment variables are supported.

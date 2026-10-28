@@ -1,8 +1,8 @@
 # High Performance mode
 
-High Performance is Screen Sharing's low-latency mode. It streams HEVC video and audio over
-UDP and adjusts the bitrate to your network. Connections that don't ask for it get the
-regular Standard mode.
+High Performance is Apple Screen Sharing's low-latency mode. It streams HEVC video
+and audio over UDP and adjusts the bitrate to your network. Connections that do
+not ask for it get Standard mode.
 
 ## What it needs
 
@@ -15,7 +15,7 @@ wayshare picks an encoder when it starts:
 `wayshare doctor` shows which one it chose, or why High Performance is unavailable. Without
 an encoder, wayshare still runs in Standard mode.
 
-NVIDIA's NVENC isn't supported yet, so NVIDIA machines use x265.
+NVIDIA's NVENC is unsupported, so NVIDIA machines use x265.
 
 Audio needs `libfdk-aac`, the `libpulse` client library, and a PulseAudio-compatible server
 such as PipeWire's `pipewire-pulse`. Without them, video works but there is no sound.

@@ -8,9 +8,19 @@ Notes for distro packagers.
 cargo build --release --frozen
 ```
 
-Build dependencies: Rust 1.89 or newer, a C linker, `pkg-config`, and the EGL and GBM
-development files (`mesa` and `libglvnd` on Arch). The minimum Rust is 1.89 (`rust-version` in `Cargo.toml`); the pin in
-`rust-toolchain.toml` is for contributors and can be ignored. `Cargo.lock` is committed.
+Builds need Rust 1.89 or newer, a C linker, `pkg-config`, and the EGL and GBM
+development files (`mesa` and `libglvnd` on Arch). Default builds also need a C++
+compiler. `Cargo.toml` sets the minimum Rust version. The pin in
+`rust-toolchain.toml` is for contributors. `Cargo.lock` is committed.
+
+Default builds include RDP and build OpenH264 from source through the
+`openh264` crate. No system OpenH264 package is needed. NASM is optional on x86,
+and the build omits assembly if it is unavailable. `--no-default-features` omits
+RDP and OpenH264.
+
+`libz-sys` uses system zlib when available and builds a bundled copy otherwise.
+Install the [zlib development files](development.md#build-prerequisites) to use
+the distro library.
 
 ## Install
 
@@ -30,6 +40,9 @@ writes their config and enables the unit.
 |---|---|---|
 | Hyprland >= 0.56 | runtime | everything |
 | libEGL, libgbm (Mesa) | linked | capture |
+| C++ runtime (`libstdc++` with GCC on Linux) | linked in default builds | OpenH264 software encoding for RDP |
+| zlib (`libz.so.1`) | linked when system zlib is available at build time | Compression. RDP dependencies select this backend |
+| libva and a driver that encodes H.264 | optional, loaded at runtime | RDP H.264 via VA-API. OpenH264 provides the software fallback |
 | libva and a driver that encodes HEVC | optional, loaded at runtime | High Performance via VA-API |
 | x265 (API build 217) | optional, loaded at runtime | High Performance without VA-API |
 | fdk-aac | optional, loaded at runtime | High Performance audio |

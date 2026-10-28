@@ -1,50 +1,104 @@
 # Security
 
-wayshare is meant for your home or office network. To reach your machine from anywhere
-else, connect over [Tailscale](https://tailscale.com) or another VPN. Don't forward port
-5900 or 3389 on your router to the internet.
+wayshare accepts Apple Screen Sharing and RDP connections on your LAN or VPN.
+Both listeners default to all IPv4 interfaces. Router port forwarding exposes
+these services to the internet. A VPN such as [Tailscale](https://tailscale.com)
+provides remote access without port forwarding.
 
-## What's encrypted
+## Login
 
-Apple Screen Sharing uses the encryption below. RDP encrypts credentials, input and
-screen updates with TLS. Check its certificate fingerprint before sending a password.
+Both protocols use the Apple-mode username and the password you choose in
+`wayshare setup`. `wayshare set-password` stores a salt and verifier in `srp-NAME`,
+not the password. The username need not match a Linux account. Someone who copies
+that file can guess passwords against it offline. A separate wayshare password
+limits the damage if that happens.
 
-| Traffic | Encrypted |
-|---|---|
-| Password | never sent; the Mac proves it knows it (SRP) |
-| Keyboard and mouse | yes, by the Mac |
-| Screen in Standard mode | **no** |
-| Clipboard | **no** |
-| Video and sound in High Performance mode | yes (SRTP) |
+Apple Screen Sharing uses an SRP proof. The Mac proves it knows the password
+without sending it. RDP sends the password inside TLS, and wayshare checks it
+against the same verifier. RDP requires an exact, case-sensitive username and an
+empty domain. It has no NLA, CredSSP, PAM, keyring, or smart-card login.
 
-Anyone who can watch your network can see your screen in Standard mode and anything you
-copy and paste. A VPN encrypts all of it.
+RDP accepts at most eight connections and gives each login 30 seconds. Failed
+logins wait at least two seconds. Before login, wayshare limits queued input to
+256 packets and 1 MiB. It sends no screen updates and accepts no desktop input
+until credentials pass.
 
-## Pick a separate password
+If the SRP record or TLS identity is unusable, RDP stays off and logs a repair
+message. Apple Screen Sharing keeps listening and still requires credentials.
 
-`wayshare set-password` stores a salted verifier, not the password. Someone who copies the
-`srp-NAME` file can still guess passwords against it offline, so don't reuse your Linux
-password or any other important one.
+## Encryption
 
-## Only accept connections over Tailscale
+| Traffic | Apple Screen Sharing | RDP |
+|---|---|---|
+| Login | SRP proof. The password is never sent | Password inside TLS |
+| Keyboard and mouse | Encrypted by the Mac | TLS |
+| Standard screen updates | Unencrypted | TLS |
+| Clipboard | Unencrypted | Unsupported |
+| High Performance video and sound | SRTP | Unsupported. RDP graphics use TLS |
 
-Run `wayshare setup` and pick `tailscale0` as the network for Apple RFB. Also set
-`[rdp] listen = "100.x.y.z:3389"` to your Tailscale address, or set
-`[rdp] enabled = false`. RDP defaults to all IPv4 interfaces independently of RFB.
-Tailscale has to be up before wayshare starts. If it isn't, wayshare can't listen on the
-address and the service fails; run `wayshare restart` once Tailscale is up.
+Anyone who can watch your network can see Apple Standard screen updates and
+clipboard data. A VPN encrypts that traffic too.
+
+## Certificate identity
+
+RDP creates a self-signed certificate and private key on first use. The default
+file is `~/.config/wayshare/rdp-identity.pem`, or
+`$XDG_CONFIG_HOME/wayshare/rdp-identity.pem`. wayshare creates it with mode 0600
+and reuses it across restarts. An invalid existing file causes an error. wayshare
+does not replace it. The certificate names are `localhost`, `127.0.0.1`, and `::1`,
+so clients warn when you connect by a LAN address.
+
+The startup log contains the certificate's SHA-256 fingerprint as colon-separated
+hex bytes. Comparing that value with the client certificate details through a
+trusted path establishes trust on first use. A SHA-1 thumbprint uses a different
+hash and cannot be compared with SHA-256. Accepting a warning without checking
+identity can send your password to another server.
+
+The certificate file provides the same SHA-256 fingerprint through a trusted
+connection to the server:
+
+```sh
+openssl x509 -in ~/.config/wayshare/rdp-identity.pem -noout -fingerprint -sha256
+```
+
+That command reads the default file. A custom `rdp.identity_file` needs its own
+path. For a client that shows only a SHA-1 thumbprint, the same certificate file
+provides a matching SHA-1 value:
+
+```sh
+openssl x509 -in ~/.config/wayshare/rdp-identity.pem -noout -fingerprint -sha1
+```
+
+A certificate the client trusts, with the right hostnames and a PKCS#8 key in
+`rdp.identity_file`, avoids reliance on the warning. See the
+[RDP settings](rdp.md#settings).
+
+## VPN access
+
+The network choice in `wayshare setup` controls Apple Screen Sharing only.
+Selecting `tailscale0` restricts that listener. RDP remains on all IPv4 interfaces
+unless `[rdp] listen` names your Tailscale address, such as `100.x.y.z:3389`.
+`[rdp] enabled = false` turns RDP off.
+
+Tailscale must be up before wayshare binds its address. An Apple listener bind
+failure stops the service. An RDP bind failure leaves Apple Screen Sharing
+running. A restart after Tailscale comes up retries the listeners.
 
 ## Ports
 
-| Port | Needed | Why |
+| Default port | Use | Inbound firewall rule |
 |---|---|---|
-| TCP 5900 | yes | the Screen Sharing connection |
-| TCP 3389 | when RDP is enabled, the default | TLS RDP with the shared SRP credentials |
-| UDP 5353 | optional | mDNS, so the machine shows up in Finder's sidebar |
-| UDP 5960, 5962 | no | High Performance video and audio. wayshare sends first, so replies come back through connection tracking |
+| TCP 5900 | Apple Screen Sharing | Required for Apple clients |
+| TCP 3389 | RDP over TLS, enabled by default | Required for RDP clients |
+| UDP 5353 | mDNS for Finder discovery | Optional. Not used for RDP discovery |
+| UDP 5960 and 5962 | Apple High Performance video and sound | Not needed. wayshare sends first, so replies use connection tracking |
 
-`wayshare setup` offers to open TCP 5900 and the enabled RDP port in ufw, normally
-TCP 3389. Existing setups must rerun setup or add the RDP rule themselves. With
-another firewall, open the ports yourself, only to your local network or VPN.
-RDP stays off if its SRP record or TLS identity is unavailable. Apple RFB keeps
-listening and still requires credentials.
+`listen`, `rdp.listen`, and `hp.port` can change these ports. High Performance
+sound uses `hp.port + 2`.
+
+Setup offers ufw rules for TCP 5900 and the enabled RDP port, normally 3389.
+Existing installs need another setup run or a TCP 3389 rule for the LAN or VPN.
+Other firewalls need their own rules. RDP has no mDNS advertisement.
+
+`wayshare doctor` checks the Apple listener and its ufw rule. It does not check
+RDP connectivity, its certificate, or its firewall rule. This is a known gap.
