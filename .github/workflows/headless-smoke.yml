@@ -37,10 +37,10 @@ jobs:
         run: |
           {
             uname -a
-            grep -E 'CONFIG_DRM_(VKMS|VGEM)' "/boot/config-$(uname -r)" || true
+            grep -E 'CONFIG_DRM_(VKMS|VGEM)|CONFIG_UDMABUF' "/boot/config-$(uname -r)" || true
             apt-cache policy "linux-modules-extra-$(uname -r)"
             if [[ -d /dev/dri ]]; then ls -l /dev/dri; else echo 'No /dev/dri on the runner.'; fi
-            for driver in vkms vgem; do
+            for driver in vkms vgem udmabuf; do
               echo "Trying software DRM driver $driver"
               sudo modprobe "$driver" || true
             done
@@ -61,6 +61,7 @@ jobs:
           devices=()
           while IFS= read -r node; do devices+=(--device "$node"); done \
             < <(bash "$GITHUB_WORKSPACE/tools/headless-smoke.sh" --list-software-devices)
+          if [[ -c /dev/udmabuf ]]; then devices+=(--device /dev/udmabuf); fi
           mkdir -p "$RUNNER_TEMP/headless-artifacts/software-drm"
           if (( ${#devices[@]} == 0 )); then
             echo 'No software DRM devices available.' | tee "$RUNNER_TEMP/headless-artifacts/software-drm/result.txt"

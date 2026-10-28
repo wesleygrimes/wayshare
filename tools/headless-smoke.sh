@@ -46,6 +46,7 @@ if [[ ${1:-} != --session ]]; then
         if [[ $driver == vgem ]]; then drm_cards=("$node" "${drm_cards[@]}"); else drm_cards+=("$node"); fi
       fi
     done
+    if [[ -c /dev/udmabuf ]]; then chown smoke:smoke /dev/udmabuf; fi
     ls -ld /dev/dri /dev/dri/* > /artifacts/devices.log
     SEATD_VTBOUND=0 seatd -u smoke > /artifacts/seatd.log 2>&1 &
     for _ in {1..50}; do [[ -S /run/seatd.sock ]] && break; sleep 0.1; done
@@ -57,7 +58,7 @@ if [[ ${1:-} != --session ]]; then
   else
     echo 'No /dev/dri devices are available.' > /artifacts/devices.log
   fi
-  exec runuser -u smoke -- env -i HOME=/home/smoke USER=smoke PATH=/usr/bin:/bin \
+  exec runuser -u smoke -- env -i HOME=/home/smoke USER=smoke PATH=/usr/bin:/bin LANG=C.UTF-8 \
     GITHUB_ACTIONS="${GITHUB_ACTIONS:-false}" \
     LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
     AQ_BACKENDS=headless AQ_NO_KMS_REQUIREMENT=1 HYPRLAND_NO_RT=1 \
@@ -105,6 +106,8 @@ xdpyinfo > /artifacts/xdisplay.log
 
 cat > "$session_dir/hyprland.lua" <<'CONF'
 hl.monitor({ output = "HEADLESS-1", mode = "800x600@30", position = "0x0", scale = 1 })
+hl.monitor({ output = "Virtual-1", disabled = true })
+hl.monitor({ output = "Virtual-2", disabled = true })
 hl.config({ debug = { disable_logs = false, enable_stdout_logs = true } })
 hl.on("hyprland.start", function()
     hl.exec_cmd("hyprctl output create headless HEADLESS-1")
@@ -139,6 +142,7 @@ while true; do printf '\r  Frame time: %s  ' "$(date +%T)"; sleep 1; done
 CLIENT
 if [[ $hypr_ready == true ]]; then
   hyprctl output create headless HEADLESS-1 > /artifacts/output.log 2>&1 || true
+  hyprctl -j monitors > /artifacts/monitors.json
   foot --app-id=wayshare-smoke --override=colors-dark.background=164e63 \
     --override=colors-dark.foreground=ffffff --font='DejaVu Sans Mono:size=18' \
     bash "$session_dir/visible-client.sh" > /artifacts/foot.log 2>&1 &
