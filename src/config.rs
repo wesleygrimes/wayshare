@@ -196,10 +196,13 @@ pub const DEFAULT_RDP_PORT: u16 = 3389;
 
 impl Settings {
     /// The RDP listen address: `[rdp] listen`, or the Apple listen address on port 3389.
+    /// Only the port changes, so an IPv6 scope ID such as `%2` carries over.
     pub fn rdp_listen(&self) -> SocketAddr {
-        self.rdp
-            .listen
-            .unwrap_or_else(|| SocketAddr::new(self.listen.ip(), DEFAULT_RDP_PORT))
+        self.rdp.listen.unwrap_or_else(|| {
+            let mut addr = self.listen;
+            addr.set_port(DEFAULT_RDP_PORT);
+            addr
+        })
     }
 
     /// Encoder settings for HP, as the encode module expects them.
@@ -311,6 +314,7 @@ mod tests {
             ("listen = \"127.0.0.1:5901\"", "127.0.0.1:3389"),
             ("listen = \"[::]:5900\"", "[::]:3389"),
             ("listen = \"[fd7a::1]:5900\"", "[fd7a::1]:3389"),
+            ("listen = \"[fe80::1%2]:5900\"", "[fe80::1%2]:3389"),
             (
                 "listen = \"100.64.0.1:5900\"\n[rdp]\ncodec = 'h264'",
                 "100.64.0.1:3389",
@@ -323,6 +327,11 @@ mod tests {
             let s = Settings::parse(config).unwrap();
             assert_eq!(s.rdp_listen(), rdp.parse().unwrap(), "{config}");
         }
+        let scoped = Settings::parse("listen = \"[fe80::1%2]:5900\"").unwrap();
+        let SocketAddr::V6(rdp) = scoped.rdp_listen() else {
+            panic!("expected IPv6");
+        };
+        assert_eq!(rdp.scope_id(), 2);
     }
 
     #[test]
