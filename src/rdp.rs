@@ -113,6 +113,9 @@ async fn serve_local(
                     std::env::var("WAYSHARE_TEST_RDP_FAIL_AFTER").ok().and_then(|s| s.parse().ok())
                 } else { None };
                 let gfx = (codec != RdpCodec::Remotefx).then(|| gfx::Connection::new(fail_after, codec == RdpCodec::EgfxRemotefx));
+                if gfx.is_none() {
+                    info!(codec = "RemoteFX/bitmap", reason = "rdp.codec = remotefx", "RDP codec negotiated");
+                }
                 let gfx_factory = gfx.as_ref().map(|connection| {
                     Box::new(gfx::Factory(connection.clone())) as Box<dyn ironrdp_server::GfxServerFactory>
                 });
@@ -145,10 +148,11 @@ async fn serve_local(
                     };
                     tokio::select! {
                         result = server.run_connection(stream) => {
-                            if result.is_err() { info!(%peer, "RDP connection closed"); }
+                            let reason = result.err().map_or_else(|| "client session ended".to_owned(), |error| format!("{error:#}"));
+                            info!(%peer, %reason, "RDP connection closed");
                         },
                         () = deadline => info!(%peer, "RDP login timed out"),
-                        result = transport::watch(socket, &flow) => {
+                        result = transport::watch(socket.clone(), &flow) => {
                             if let Err(error) = result { warn!(%peer, %error, "RDP socket monitor failed"); }
                         },
                     }
@@ -279,14 +283,9 @@ struct Display {
     flow: Arc<transport::Output>,
 }
 
-// A session may resize repeatedly, but a broken confirmation must not spin forever.
-const MAX_REACTIVATIONS: u8 = 32;
-
 struct ResizeState {
     target: DesktopSize,
     announced: DesktopSize,
-    reactivations: u8,
-    warned: bool,
 }
 
 impl ResizeState {
@@ -294,8 +293,6 @@ impl ResizeState {
         Self {
             target,
             announced: target,
-            reactivations: 0,
-            warned: false,
         }
     }
 
@@ -303,16 +300,6 @@ impl ResizeState {
         if self.target == current && !force {
             return None;
         }
-        if self.reactivations >= MAX_REACTIVATIONS {
-            if !self.warned {
-                warn!(?current, requested = ?self.target, limit = MAX_REACTIVATIONS,
-                    "RDP reactivation limit reached; continuing at current size");
-                self.warned = true;
-            }
-            self.target = current;
-            return None;
-        }
-        self.reactivations += 1;
         self.announced = self.target;
         Some(self.announced)
     }
@@ -331,18 +318,70 @@ fn validate_size(width: u32, height: u32) -> Result<DesktopSize> {
 }
 
 fn layout_size(layout: &DisplayControlMonitorLayout) -> Result<DesktopSize> {
-    ensure!(layout.monitors().len() == 1, "RDP supports one monitor");
-    let monitor = &layout.monitors()[0];
-    ensure!(
-        monitor.is_primary() && monitor.position() == Some((0, 0)),
-        "RDP requires a primary monitor at the origin"
-    );
+    let monitors = layout.monitors();
+    let monitor = monitors
+        .iter()
+        .find(|monitor| monitor.is_primary())
+        .or_else(|| monitors.first())
+        .ok_or_else(|| anyhow::anyhow!("RDP layout has no monitors"))?;
+    if monitors.len() > 1 {
+        for other in monitors
+            .iter()
+            .filter(|other| !std::ptr::eq(*other, monitor))
+        {
+            info!(
+                ?other,
+                "RDP additional monitor ignored; applying primary or first monitor"
+            );
+        }
+    }
     let (width, height) = monitor.dimensions();
     let size = validate_size(width, height)?;
     Ok(size)
 }
 
 impl Display {
+    fn accept_client_size(&mut self, client_size: DesktopSize) -> DesktopSize {
+        debug!(?client_size, "RDP client desktop size");
+        if !self.authenticated.load(Ordering::Acquire) {
+            return self.size;
+        }
+        self.client_size = client_size;
+        if !self.started {
+            let first = !self.started;
+            self.started = true;
+            if let Ok(size) = validate_size(client_size.width.into(), client_size.height.into()) {
+                self.size = size;
+                {
+                    let mut state = self.target.lock().unwrap();
+                    state.target = size;
+                    state.announced = size;
+                }
+                let ready = !first
+                    || self.control.as_ref().is_none_or(|control| {
+                        control
+                            .session_started(self.session)
+                            .map_err(|error| {
+                                warn!(%error, "RDP display startup failed; scaling frames");
+                            })
+                            .is_ok()
+                    });
+                if ready {
+                    self.resize_output(size);
+                }
+            }
+        } else {
+            // Demand Active already announced this target. Some clients echo their
+            // original Bitmap caps on every Confirm Active, even after a resize.
+            self.size = self.target.lock().unwrap().announced;
+            if self.size != client_size {
+                debug!(?client_size, announced = ?self.size, "RDP keeping announced size after client confirm echo");
+            }
+        }
+        *self.extent.lock().unwrap() = self.size;
+        self.size
+    }
+
     fn resize_output(&mut self, size: DesktopSize) {
         if let Some(control) = &self.control {
             match control.configure_size(self.session, size.width.into(), size.height.into()) {
@@ -379,42 +418,7 @@ impl RdpServerDisplay for Display {
     }
 
     async fn request_initial_size(&mut self, client_size: DesktopSize) -> DesktopSize {
-        debug!(?client_size, "RDP client desktop size");
-        if !self.authenticated.load(Ordering::Acquire) {
-            return self.size;
-        }
-        self.client_size = client_size;
-        if !self.started {
-            self.started = true;
-            if let Ok(size) = validate_size(client_size.width.into(), client_size.height.into()) {
-                self.size = size;
-                {
-                    let mut state = self.target.lock().unwrap();
-                    state.target = size;
-                    state.announced = size;
-                }
-                let ready = self.control.as_ref().is_none_or(|control| {
-                    control
-                        .session_started(self.session)
-                        .map_err(|error| {
-                            warn!(%error, "RDP display startup failed; scaling frames");
-                        })
-                        .is_ok()
-                });
-                if ready {
-                    self.resize_output(size);
-                }
-            }
-        } else {
-            // Demand Active already announced this target. Some clients echo their
-            // original Bitmap caps on every Confirm Active, even after a resize.
-            self.size = self.target.lock().unwrap().announced;
-            if self.size != client_size {
-                debug!(?client_size, announced = ?self.size, "RDP keeping announced size after client confirm echo");
-            }
-        }
-        *self.extent.lock().unwrap() = self.size;
-        self.size
+        self.accept_client_size(client_size)
     }
 
     fn request_layout(&mut self, layout: DisplayControlMonitorLayout) {
@@ -426,13 +430,21 @@ impl RdpServerDisplay for Display {
             Ok(size) => {
                 let allowed = {
                     let state = self.target.lock().unwrap();
-                    state.target != size && state.reactivations < MAX_REACTIVATIONS
+                    state.target != size
                 };
                 if allowed {
                     self.resize_output(size);
                     self.target.lock().unwrap().target = size;
+                    if self
+                        .gfx
+                        .as_ref()
+                        .is_some_and(|connection| connection.uses_egfx())
+                    {
+                        self.size = size;
+                        *self.extent.lock().unwrap() = size;
+                    }
                 } else if size != self.size {
-                    warn!(?size, current = ?self.size, "RDP layout ignored; unchanged target or reactivation limit");
+                    warn!(?size, current = ?self.size, "RDP layout ignored; unchanged target");
                 }
             }
             Err(error) => warn!(%error, "RDP layout rejected"),
@@ -495,16 +507,20 @@ struct CaptureContext {
 
 fn capture(
     frames: FrameSourceFactory,
-    size: DesktopSize,
+    mut size: DesktopSize,
     target: &Mutex<ResizeState>,
     sender: &mpsc::Sender<Result<DisplayUpdate>>,
     stop: &AtomicBool,
     summary: CaptureContext,
 ) -> Result<()> {
     let gfx = &summary.gfx;
-    // Resize updates end this worker. Reactivation opens capture at the new mode
+    // Legacy resize updates end this worker. Reactivation opens capture at the new mode
     // and builds a fresh encoder before any bitmap of the new dimensions is sent.
-    if let Some(requested) = target.lock().unwrap().reactivate(size, false) {
+    if !gfx
+        .as_ref()
+        .is_some_and(|connection| connection.uses_egfx())
+        && let Some(requested) = target.lock().unwrap().reactivate(size, false)
+    {
         let _ = sender.blocking_send(Ok(DisplayUpdate::Resize(requested)));
         return Ok(());
     }
@@ -513,17 +529,32 @@ fn capture(
     let mut dirty = true;
     let mut delivered = 0_u64;
     let mut stream: Option<gfx::Stream> = None;
-    if gfx.is_none() {
-        info!(
-            codec = "RemoteFX/bitmap",
-            reason = "rdp.codec = remotefx",
-            "RDP codec negotiated"
-        );
-    }
     while !stop.load(Ordering::Relaxed) {
-        if let Some(requested) = target.lock().unwrap().reactivate(size, false) {
-            let _ = sender.blocking_send(Ok(DisplayUpdate::Resize(requested)));
-            return Ok(());
+        let requested = target.lock().unwrap().target;
+        if requested != size {
+            if gfx
+                .as_ref()
+                .is_some_and(|connection| connection.uses_egfx())
+            {
+                if let Some(active) = &mut stream {
+                    let messages = active.resize(requested)?;
+                    if sender
+                        .blocking_send(Ok(DisplayUpdate::Egfx(messages)))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                size = requested;
+                target.lock().unwrap().announced = size;
+                source = frames()?;
+                first = true;
+                dirty = true;
+            } else {
+                let requested = target.lock().unwrap().reactivate(size, false).unwrap();
+                let _ = sender.blocking_send(Ok(DisplayUpdate::Resize(requested)));
+                return Ok(());
+            }
         }
         dirty |= source.advance();
         if let Some(connection) = gfx {
@@ -532,9 +563,17 @@ fn capture(
                     std::thread::sleep(Duration::from_millis(10));
                     continue;
                 }
-                gfx::Mode::Avc420 | gfx::Mode::EgfxRemoteFx if stream.is_none() => {
+                gfx::Mode::Avc420 | gfx::Mode::EgfxRemoteFx | gfx::Mode::Planar
+                    if stream.is_none() =>
+                {
                     match gfx::Stream::new(connection.clone(), size) {
-                        Ok(new) => {
+                        Ok(mut new) => {
+                            if sender
+                                .blocking_send(Ok(DisplayUpdate::Egfx(new.take_control())))
+                                .is_err()
+                            {
+                                break;
+                            }
                             stream = Some(new);
                             dirty = true;
                         }
@@ -741,13 +780,13 @@ mod tests {
 
     #[test]
     fn display_control_caps_allow_an_8192_square_output() {
-        let caps = ironrdp_server::display_control::capabilities();
-        assert_eq!(caps.max_monitor_area(), 8192 * 8192);
+        let caps = ironrdp_server::display_control::capabilities(16);
+        assert_eq!(caps.max_monitor_area(), 16 * 8192 * 8192);
         let bytes =
             ironrdp_core::encode_vec(&ironrdp_displaycontrol::pdu::DisplayControlPdu::Caps(caps))
                 .unwrap();
         assert_eq!(bytes.len(), 20);
-        assert_eq!(&bytes[8..12], &1_u32.to_le_bytes());
+        assert_eq!(&bytes[8..12], &16_u32.to_le_bytes());
         assert_eq!(&bytes[12..16], &8192_u32.to_le_bytes());
         assert_eq!(&bytes[16..20], &8192_u32.to_le_bytes());
     }
@@ -784,8 +823,23 @@ mod tests {
                 height: 1580
             }
         );
-        assert!(
-            layout_size(&DisplayControlMonitorLayout::new(&[primary, secondary]).unwrap()).is_err()
+        assert_eq!(
+            layout_size(&DisplayControlMonitorLayout::new(&[secondary, primary]).unwrap()).unwrap(),
+            DesktopSize {
+                width: 836,
+                height: 1580
+            }
+        );
+        // Decoding permits a client layout without a primary flag. Use its first monitor.
+        let mut bytes = ironrdp_core::encode_vec(&layout).unwrap();
+        bytes[8..12].fill(0);
+        let no_primary = ironrdp_core::decode::<DisplayControlMonitorLayout>(&bytes).unwrap();
+        assert_eq!(
+            layout_size(&no_primary).unwrap(),
+            DesktopSize {
+                width: 836,
+                height: 1580
+            }
         );
         assert!(
             layout_size(
@@ -938,7 +992,6 @@ mod tests {
                 if (b.width.get(), b.height.get()) == (width, height))
             );
             drop(updates);
-            assert_eq!(display.target.lock().unwrap().reactivations, 0);
             let next = DesktopSize {
                 width: height & !1,
                 height: width,
@@ -965,7 +1018,6 @@ mod tests {
                 matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Bitmap(b))
                 if (b.width.get(), b.height.get()) == (next.width, next.height))
             );
-            assert_eq!(display.target.lock().unwrap().reactivations, 1);
         }
     }
 
@@ -987,41 +1039,21 @@ mod tests {
         assert_eq!(state.reactivate(landscape, false), Some(portrait));
     }
 
-    #[tokio::test]
-    async fn reactivation_budget_continues_frames_at_current_size() {
-        let size = DesktopSize {
+    #[test]
+    fn reactivations_have_no_lifetime_limit() {
+        let mut current = DesktopSize {
             width: 836,
             height: 1580,
         };
-        let mut display = display(size);
-        let mut current = size;
-        for _ in 0..MAX_REACTIVATIONS {
-            let requested = DesktopSize {
+        let mut state = ResizeState::new(current);
+        for _ in 0..1000 {
+            state.target = DesktopSize {
                 width: current.height,
                 height: current.width,
             };
-            display.target.lock().unwrap().target = requested;
-            let mut updates = display.updates().await.unwrap();
-            assert!(
-                matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Resize(s)) if s == requested)
-            );
-            drop(updates);
-            display.started = true;
-            current = display.request_initial_size(current).await;
+            current = state.reactivate(current, false).unwrap();
         }
-        display.target.lock().unwrap().target = DesktopSize {
-            width: 1580,
-            height: 797,
-        };
-        let mut updates = display.updates().await.unwrap();
-        assert!(
-            matches!(completed_update(&mut updates).await.unwrap(), Some(DisplayUpdate::Bitmap(b))
-            if (b.width.get(), b.height.get()) == (current.width, current.height))
-        );
-        let mut state = display.target.lock().unwrap();
-        assert_eq!(state.reactivations, MAX_REACTIVATIONS);
-        assert!(state.reactivate(current, true).is_none());
-        assert_eq!(state.target, current);
+        assert_eq!(state.reactivate(current, true), Some(current));
     }
 
     #[tokio::test]
@@ -1112,6 +1144,7 @@ mod tests {
         use std::sync::atomic::AtomicU32;
         struct Source {
             color: Arc<AtomicU32>,
+            observed: Arc<AtomicU32>,
             frame: Frame,
         }
         impl FrameSource for Source {
@@ -1122,6 +1155,7 @@ mod tests {
                 let color = self.color.load(Ordering::Acquire);
                 let dirty = self.frame.pixels[0] != color;
                 self.frame.pixels.fill(color);
+                self.observed.store(color, Ordering::Release);
                 dirty
             }
             fn frame(&self) -> &Frame {
@@ -1130,6 +1164,8 @@ mod tests {
         }
         let color = Arc::new(AtomicU32::new(1));
         let c = color.clone();
+        let observed = Arc::new(AtomicU32::new(0));
+        let source_observed = observed.clone();
         let mut display = display(DesktopSize {
             width: 200,
             height: 200,
@@ -1137,6 +1173,7 @@ mod tests {
         display.frames = Arc::new(move || {
             Ok(Box::new(Source {
                 color: c.clone(),
+                observed: source_observed.clone(),
                 frame: Frame {
                     width: 200,
                     height: 200,
@@ -1156,6 +1193,13 @@ mod tests {
                 .is_err()
         );
         color.store(7, Ordering::Release);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while observed.load(Ordering::Acquire) != 7 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
         updates.update_sent();
         let update = tokio::time::timeout(Duration::from_secs(2), updates.next_update())
             .await

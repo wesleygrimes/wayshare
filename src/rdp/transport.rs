@@ -47,9 +47,9 @@ impl Peer {
     }
 }
 
-fn reset_on_close(socket: &std::net::TcpStream) {
+pub(super) fn reset_on_close(socket: &std::net::TcpStream) {
     // FIN waits behind queued graphics and cannot reach a zero-window client.
-    // Abort only stalled/replaced sessions so the client sees RST immediately.
+    // Reset stalled and replaced sessions so the client sees RST immediately.
     if let Err(error) = socket2::SockRef::from(socket).set_linger(Some(Duration::ZERO)) {
         tracing::warn!(%error, "RDP abortive close setup failed");
     }

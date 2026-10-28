@@ -65,3 +65,7 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 
 [profile.release]
 strip = true
+
+[patch.crates-io]
+ironrdp-acceptor = { path = "vendor/ironrdp-acceptor" }
+ironrdp-dvc = { path = "vendor/ironrdp-dvc" }

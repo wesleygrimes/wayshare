@@ -8,6 +8,8 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result, bail};
 use ironrdp_acceptor::{Acceptor, AcceptorResult, BeginResult, DesktopSize};
 use ironrdp_async::Framed;
+use ironrdp_connector::Sequence;
+use ironrdp_core::WriteBuf;
 use ironrdp_cliprdr::CliprdrServer;
 use ironrdp_cliprdr::backend::ClipboardMessage;
 use ironrdp_core::{decode, encode_vec, impl_as_any};
@@ -33,7 +35,7 @@ use tokio::net::TcpSocket;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task;
 use tokio_rustls::TlsAcceptor;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::autodetect::{AutoDetectManager, RttSnapshot};
 use crate::clipboard::CliprdrServerFactory;
@@ -56,6 +58,7 @@ fn display_control_opened(channel: &ironrdp_svc::StaticVirtualChannel) -> bool {
 
 /// TCP listen backlog size for the RDP server socket.
 const LISTENER_BACKLOG: u32 = 1024;
+const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Action to take after a client disconnects.
 ///
@@ -469,17 +472,10 @@ pub struct RdpServer {
     local_addr: Option<SocketAddr>,
     autodetect: Option<AutoDetectManager>,
     connection_handler: Option<Box<dyn ConnectionHandler>>,
-    /// True while the client has sent `SuppressOutput { desktop_rect: None }`,
-    /// the standard RDP "I don't need display updates right now" signal
-    /// (mstsc raises it on window minimize). Cleared on
-    /// `SuppressOutput { Some(rect) }` or `RefreshRectangle` (sent on
-    /// refocus). Exposed via [`Self::display_suppressed_handle`] so display
-    /// backends can hold a clone and skip frame emission while it's set.
-    /// Without this, a server keeps streaming high-bitrate
-    /// EGFX/H.264 frames into a minimized client, which accumulates them
-    /// and locks up its input dispatch for seconds on refocus while it
-    /// chews through the backlog.
+    /// Pauses graphics while preserving capture dirty state. Control traffic,
+    /// including Deactivate All, must bypass this flag.
     display_suppressed: Arc<AtomicBool>,
+    demanded_size: Option<DesktopSize>,
 
     /// Latest NetworkAutoDetect round-trip time in milliseconds, or `u32::MAX`
     /// until the first measurement (and while auto-detect is disabled). Updated
@@ -567,6 +563,7 @@ impl RdpServer {
             local_addr: None,
             autodetect: None,
             connection_handler,
+            demanded_size: None,
             display_suppressed: display_suppressed.unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
             autodetect_rtt: {
                 // Reset to the sentinel: an injected handle must not expose a stale value before the first measurement.
@@ -698,35 +695,32 @@ impl RdpServer {
             acceptor.attach_static_channel(RdpsndServer::new(backend));
         }
 
-        let dcs_backend = DisplayControlBackend::new(Arc::clone(&self.display));
-        let dvc = dvc::DrdynvcServer::new()
-            .with_dynamic_channel(AInputHandler {
-                handler: Arc::clone(&self.handler),
-            })
-            .with_dynamic_channel(DisplayControlServer::new(Box::new(dcs_backend)));
-
-        let dvc = {
-            let echo_handle = self.echo_handle.clone();
-            dvc.with_dynamic_channel(EchoDvcBridge::new(echo_handle))
-        };
-
+        let mut dvc = dvc::DrdynvcServer::with_first_channel_id(1);
         #[cfg(feature = "egfx")]
-        let dvc = {
-            let mut dvc = dvc;
-            if let Some(gfx_factory) = self.gfx_factory.as_deref() {
-                if let Some((bridge, handle)) = gfx_factory.build_server_with_handle() {
-                    self.gfx_handle = Some(handle);
-                    dvc = dvc.with_dynamic_channel(bridge);
-                } else {
-                    let handler = gfx_factory.build_gfx_handler();
-                    let gfx_server = ironrdp_egfx::server::GraphicsPipelineServer::new(handler);
-                    dvc = dvc.with_dynamic_channel(gfx_server);
-                }
+        if let Some(gfx_factory) = self.gfx_factory.as_deref() {
+            if let Some((bridge, handle)) = gfx_factory.build_server_with_handle() {
+                self.gfx_handle = Some(handle);
+                dvc = dvc.with_dynamic_channel(bridge);
+            } else {
+                let handler = gfx_factory.build_gfx_handler();
+                dvc = dvc.with_dynamic_channel(ironrdp_egfx::server::GraphicsPipelineServer::new(handler));
             }
-            dvc
-        };
+        }
+        dvc = self.attach_auxiliary_channels(dvc);
 
         acceptor.attach_static_channel(dvc);
+    }
+
+    fn attach_auxiliary_channels(&self, mut dvc: dvc::DrdynvcServer) -> dvc::DrdynvcServer {
+        let input = AInputHandler {
+            handler: Arc::clone(&self.handler),
+        };
+        let display = DisplayControlServer::new(
+            Box::new(DisplayControlBackend::new(Arc::clone(&self.display))),
+            16,
+        );
+        dvc = dvc.with_dynamic_channel(display).with_dynamic_channel(input);
+        dvc.with_dynamic_channel(EchoDvcBridge::new(self.echo_handle.clone()))
     }
 
     /// Run a single RDP connection over `stream`, performing the
@@ -825,6 +819,7 @@ impl RdpServer {
         // here also covers backends that share an externally-created Arc via
         // `set_display_suppressed_handle()`.
         self.display_suppressed.store(false, Ordering::Relaxed);
+        self.demanded_size = None;
 
         let framed = TokioFramed::new(stream);
 
@@ -832,6 +827,13 @@ impl RdpServer {
         let capabilities = capabilities::capabilities(&self.opts, size);
         let mut acceptor = Acceptor::new(self.opts.security.flag(), size, capabilities, self.creds.clone());
         acceptor.set_honor_client_desktop_size(self.opts.honor_client_desktop_size);
+        let mut flags = ironrdp_pdu::nego::ResponseFlags::EXTENDED_CLIENT_DATA_SUPPORTED;
+        #[cfg(feature = "egfx")]
+        if self.gfx_factory.is_some() {
+            flags |= ironrdp_pdu::nego::ResponseFlags::DYNVC_GFX_PROTOCOL_SUPPORTED;
+        }
+        flags |= ironrdp_pdu::nego::ResponseFlags::RESTRICTED_ADMIN_MODE_SUPPORTED;
+        acceptor.set_negotiation_response_flags(flags);
 
         self.attach_channels(&mut acceptor);
 
@@ -1046,7 +1048,7 @@ impl RdpServer {
                     .await
                     .context("X224 input error")?
                 {
-                    debug!("Got disconnect request");
+                    info!(reason = "client disconnect request", "RDP connection close");
                     return Ok(RunState::Disconnect);
                 }
             }
@@ -1327,6 +1329,12 @@ impl RdpServer {
                             continue;
                         }
                         if display_updates.take_refresh() { encoder.invalidate(); }
+                        // Capture pauses new EGFX frames. Finish any already queued frame so
+                        // surface resets and reactivation can pass during suppression.
+                        let control = matches!(update, DisplayUpdate::Resize(_));
+                        #[cfg(feature = "egfx")]
+                        let control = control || matches!(update, DisplayUpdate::Egfx(_));
+                        display_writer.suppressed = if control { None } else { Some(suppressed.clone()) };
                         match Self::dispatch_display_update(
                             update,
                             &mut display_writer,
@@ -1390,6 +1398,7 @@ impl RdpServer {
             state = dispatch_events => state,
         );
 
+        if let Err(error) = &state { info!(%error, reason = "client loop error", "RDP connection close"); }
         debug!("End of client loop: {state:?}");
         state
     }
@@ -1438,7 +1447,7 @@ impl RdpServer {
             }
         }
 
-        self.static_channels = result.static_channels;
+        if !result.reactivation { self.static_channels = result.static_channels; }
         if !result.reactivation {
             for (_type_id, channel, channel_id) in self.static_channels.iter_mut() {
                 debug!(target: "wayshare::rdp", ?channel, ?channel_id, "RDP static channel negotiated");
@@ -1471,7 +1480,11 @@ impl RdpServer {
                         width: b.desktop_width,
                         height: b.desktop_height,
                     };
-                    let display_size = self.display.lock().await.request_initial_size(client_size).await;
+                    let mut display = self.display.lock().await;
+                    let display_size = display.request_initial_size(client_size).await;
+                    if result.reactivation {
+                        info!(demanded = ?self.demanded_size, confirmed = ?client_size, applied = ?display_size, "RDP reactivation confirmed");
+                    }
 
                     // It's problematic when the client didn't resize, as we send bitmap updates that don't fit.
                     // The client will likely drop the connection.
@@ -1656,10 +1669,12 @@ impl RdpServer {
                 rdp::headers::ShareDataPdu::SuppressOutput(pdu) => {
                     let suppress = pdu.desktop_rect.is_none();
                     self.display_suppressed.store(suppress, Ordering::Release);
-                    debug!(target: "wayshare::rdp", suppress, "RDP suppress-output state changed");
+                    let rect = pdu.desktop_rect.as_ref().map(|r| format!("{r:?}")).unwrap_or_else(|| "absent".into());
+                    info!(allowDisplayUpdates = u8::from(!suppress), rect, "RDP Suppress Output");
                     if !suppress { self.display.lock().await.request_refresh(); }
                 }
-                rdp::headers::ShareDataPdu::RefreshRectangle(_) => {
+                rdp::headers::ShareDataPdu::RefreshRectangle(pdu) => {
+                    info!(rects = ?pdu.areas_to_refresh, "RDP Refresh Rect");
                     // Refresh requests do not revoke an explicit Suppress Output.
                     self.display.lock().await.request_refresh();
                 }
@@ -1742,7 +1757,7 @@ impl RdpServer {
                     // DisplayControlServer::start generates caps on the successful DVC create response.
                     // Control replies are queued so reads can continue during a graphics write.
                     if caps_generated {
-                        debug!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), caps = ?crate::display_control::capabilities(), "RDP Display Control caps queued");
+                        info!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), "RDP Display Control caps write queued");
                     }
                     debug!(target: "wayshare::rdp", channel_id = data.channel_id, response_bytes = response.len(), display_control_open = display_control_opened(svc), "RDP static channel processed");
                 } else {
@@ -1801,10 +1816,15 @@ impl RdpServer {
     where
         S: AsyncRead + AsyncWrite + Sync + Send + Unpin,
     {
+        let mut channel_ids = None;
         loop {
-            let (new_framed, result) = ironrdp_acceptor::accept_finalize(framed, &mut acceptor)
-                .await
-                .context("failed to accept client during finalize")?;
+            let (new_framed, result) = if let Some((io, user, message)) = channel_ids {
+                self.finish_reactivation(framed, &mut acceptor, io, user, message).await?
+            } else {
+                ironrdp_acceptor::accept_finalize(framed, &mut acceptor)
+                    .await.context("failed to accept client during finalize")?
+            };
+            channel_ids = Some((result.io_channel_id, result.user_channel_id, result.message_channel_id));
 
             let (mut reader, mut writer) = split_tokio_framed(new_framed);
 
@@ -1813,15 +1833,15 @@ impl RdpServer {
                     unreachable!();
                 }
                 RunState::DeactivationReactivation { desktop_size } => {
-                    // No description of such behavior was found in the
-                    // specification, but apparently, we must keep the channel
-                    // state as they were during reactivation. This fixes
-                    // various state issues during client resize.
+                    // Keep virtual channels on the server so layouts and control
+                    // replies work during activation. The acceptor retains MCS IDs.
                     acceptor = Acceptor::new_deactivation_reactivation(
                         acceptor,
-                        core::mem::take(&mut self.static_channels),
+                        StaticChannelSet::new(),
                         desktop_size,
                     )?;
+                    self.demanded_size = Some(desktop_size);
+                    info!(demanded = ?desktop_size, "RDP reactivation demanded");
                     framed = unsplit_tokio_framed(reader, writer);
                     continue;
                 }
@@ -1831,6 +1851,74 @@ impl RdpServer {
                 }
             }
         }
+    }
+
+    async fn finish_reactivation<S>(
+        &mut self, mut framed: TokioFramed<S>, acceptor: &mut Acceptor,
+        io: u16, user: u16, message: Option<u16>,
+    ) -> Result<(TokioFramed<S>, AcceptorResult)>
+    where S: AsyncRead + AsyncWrite + Sync + Send + Unpin {
+        let deadline = tokio::time::Instant::now() + ACTIVATION_TIMEOUT;
+        info!(timer = "activation", delay_ms = 5000, "RDP rotation timer start");
+        let mut buf = WriteBuf::new();
+        loop {
+            if let Some(result) = acceptor.get_result() {
+                info!(timer = "activation", reason = "activation complete", "RDP rotation timer cancel");
+                return Ok((framed, result));
+            }
+            self.check_activation_deadline(deadline)?;
+            buf.clear();
+            let written = if acceptor.next_pdu_hint().is_some() {
+                let (action, bytes) = loop {
+                    tokio::select! {
+                        pdu = framed.read_pdu() => break pdu?,
+                        _ = tokio::time::sleep(Duration::from_millis(10)) => {
+                            self.check_activation_deadline(deadline)?;
+                        }
+                    }
+                };
+                // Suppression, refresh and virtual channels are independent of activation.
+                // Feeding them to the acceptor can fail its expected Confirm Active step.
+                let control = match decode::<X224<mcs::McsMessage<'_>>>(&bytes) {
+                    Ok(X224(mcs::McsMessage::SendDataRequest(ref data))) => {
+                        data.channel_id != io || matches!(decode::<rdp::headers::ShareControlHeader>(&data.user_data),
+                            Ok(rdp::headers::ShareControlHeader { share_control_pdu: ShareControlPdu::Data(rdp::headers::ShareDataHeader {
+                                share_data_pdu: rdp::headers::ShareDataPdu::SuppressOutput(_) | rdp::headers::ShareDataPdu::RefreshRectangle(_), .. }), .. }))
+                    }
+                    _ => action == ironrdp_pdu::Action::FastPath,
+                };
+                if control {
+                    let control_deadline = deadline;
+                    match tokio::time::timeout_at(control_deadline, self.dispatch_pdu(action, bytes, &mut framed, io, user, message)).await {
+                        Ok(result) => {
+                            if matches!(result?, RunState::Disconnect) {
+                                bail!("client disconnected during reactivation");
+                            }
+                        }
+                        Err(_) => self.check_activation_deadline(tokio::time::Instant::now())?,
+                    }
+                    continue;
+                }
+                acceptor.step(&bytes, &mut buf)?
+            } else { acceptor.step_no_input(&mut buf)? };
+            if written.size().is_some() {
+                let write_deadline = deadline;
+                match tokio::time::timeout_at(write_deadline, framed.write_all(buf.filled())).await {
+                    Ok(result) => result?,
+                    Err(_) => self.check_activation_deadline(tokio::time::Instant::now())?,
+                }
+            }
+        }
+    }
+
+    fn check_activation_deadline(&mut self, deadline: tokio::time::Instant) -> Result<()> {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            info!(timer = "activation", "RDP rotation timer fire");
+            info!(reason = "reactivation exceeded 5 seconds", "RDP connection close");
+            bail!("reactivation exceeded 5 seconds");
+        }
+        Ok(())
     }
 
     pub fn set_credentials(&mut self, creds: Option<Credentials>) {
@@ -1986,6 +2074,9 @@ mod output_tests {
         let rect = InclusiveRectangle { left: 0, top: 0, right: 835, bottom: 1579 };
         assert!(!deliver(&mut server, ShareDataPdu::SuppressOutput(rdp::suppress_output::SuppressOutputPdu { desktop_rect: None })).await);
         assert!(server.display_suppressed.load(Ordering::Acquire));
+        // Suppression has no recovery timer or disconnect side effect.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(server.display_suppressed.load(Ordering::Acquire));
         deliver(&mut server, ShareDataPdu::RefreshRectangle(rdp::refresh_rectangle::RefreshRectanglePdu { areas_to_refresh: vec![rect.clone()] })).await;
         assert!(server.display_suppressed.load(Ordering::Acquire));
         assert_eq!(refreshes.load(Ordering::Relaxed), 1);
@@ -1993,6 +2084,37 @@ mod output_tests {
         assert!(!server.display_suppressed.load(Ordering::Acquire));
         assert_eq!(refreshes.load(Ordering::Relaxed), 2);
         assert!(deliver(&mut server, ShareDataPdu::ShutdownRequest).await);
+    }
+
+    struct ResizeDisplay;
+    struct ResizeUpdates;
+    #[async_trait::async_trait]
+    impl RdpServerDisplay for ResizeDisplay {
+        async fn size(&mut self) -> DesktopSize { DesktopSize { width: 836, height: 1580 } }
+        async fn updates(&mut self) -> Result<Box<dyn RdpServerDisplayUpdates>> { Ok(Box::new(ResizeUpdates)) }
+    }
+    #[async_trait::async_trait]
+    impl RdpServerDisplayUpdates for ResizeUpdates {
+        async fn next_update(&mut self) -> Result<Option<DisplayUpdate>> {
+            Ok(Some(DisplayUpdate::Resize(DesktopSize { width: 1580, height: 797 })))
+        }
+    }
+
+    #[tokio::test]
+    async fn resize_deactivate_all_bypasses_suppression() {
+        let mut server = RdpServer::builder().with_addr(([127,0,0,1],0))
+            .with_no_security().with_no_input().with_display_handler(ResizeDisplay).build();
+        server.display_suppressed.store(true, Ordering::Release);
+        let (stream, peer) = tokio::io::duplex(4096);
+        let (mut reader, mut writer) = split_tokio_framed(TokioFramed::new(stream));
+        let mut peer = TokioFramed::new(peer);
+        let encoder = UpdateEncoder::new(DesktopSize { width: 836, height: 1580 }, CmdFlags::empty(), UpdateEncoderCodecs::new(), 8*1024*1024).unwrap();
+        let result = tokio::time::timeout(Duration::from_millis(250), server.client_loop(&mut reader, &mut writer, 1003, 1001, None, encoder)).await.unwrap().unwrap();
+        assert!(matches!(result, RunState::DeactivationReactivation { .. }));
+        let (_, bytes) = peer.read_pdu().await.unwrap();
+        let X224(mcs::McsMessage::SendDataIndication(data)) = decode::<X224<mcs::McsMessage<'_>>>(&bytes).unwrap() else { panic!("missing deactivate") };
+        assert!(matches!(decode::<rdp::headers::ShareControlHeader>(&data.user_data).unwrap().share_control_pdu, ShareControlPdu::ServerDeactivateAll(_)));
+        assert!(server.display_suppressed.load(Ordering::Acquire));
     }
 
     #[tokio::test]

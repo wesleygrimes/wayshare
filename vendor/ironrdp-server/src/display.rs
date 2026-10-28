@@ -306,6 +306,7 @@ pub trait RdpServerDisplay: Send {
         self.size().await
     }
 
+
     /// Report the legacy codec selected from the client's bitmap capabilities.
     fn negotiated_legacy_codec(&mut self, _codec: &'static str) {}
 
