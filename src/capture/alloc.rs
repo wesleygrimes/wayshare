@@ -129,6 +129,8 @@ pub struct Allocator {
     udmabuf: Option<File>,
     /// GBM on this node couldn't map a capture buffer for CPU reads.
     pub gbm_map_failed: bool,
+    /// The kernel has no udmabuf (CONFIG_UDMABUF off, as on some Asahi kernels).
+    pub udmabuf_missing: bool,
 }
 
 impl Allocator {
@@ -145,7 +147,14 @@ impl Allocator {
             memory: Memory::Gpu,
             udmabuf: None,
             gbm_map_failed: false,
+            udmabuf_missing: false,
         })
+    }
+
+    /// CPU capture can't use a dmabuf here: GBM can't map one, or there is no udmabuf to
+    /// make one in system memory. Capture goes through wl_shm instead.
+    pub fn cpu_dmabuf_unusable(&self) -> bool {
+        self.gbm_map_failed || self.udmabuf_missing
     }
 
     /// virtio-gpu (virgl) leaves captured dmabufs empty, so capture goes through wl_shm.
@@ -282,13 +291,16 @@ impl Allocator {
     /// Single-plane 32 bpp LINEAR buffer backed by a sealed memfd.
     fn allocate_udmabuf(&mut self, width: u32, height: u32) -> Result<Allocation> {
         if self.udmabuf.is_none() {
-            self.udmabuf = Some(
-                OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open("/dev/udmabuf")
-                    .context("open /dev/udmabuf")?,
-            );
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open("/dev/udmabuf");
+            if let Err(e) = &file
+                && e.kind() == std::io::ErrorKind::NotFound
+            {
+                self.udmabuf_missing = true;
+            }
+            self.udmabuf = Some(file.context("open /dev/udmabuf")?);
         }
         let stride = (width * 4).next_multiple_of(256);
         // udmabuf requires the host kernel's page alignment (ARM may use 16 or 64 KiB).
