@@ -394,7 +394,12 @@ mod tests {
 
     #[test]
     fn example_config_parses() {
-        let s = Settings::parse(include_str!("../contrib/config.example.toml")).unwrap();
+        let example = include_str!("../contrib/config.example.toml");
+        assert_eq!(Settings::parse(example).is_ok(), cfg!(feature = "rdp"));
+        let mut s: Settings = toml::from_str(example).unwrap();
+        assert!(s.rdp.enabled);
+        s.rdp.enabled = cfg!(feature = "rdp");
+        s.validate().unwrap();
         assert_eq!(s.output, None);
         assert!(s.hp.enabled && s.input.enabled && s.resize && s.mdns.enabled);
     }
