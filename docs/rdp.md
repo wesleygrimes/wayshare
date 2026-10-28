@@ -1,8 +1,8 @@
 # RDP
 
 RDP shares your Hyprland monitor over TLS with the same username and password as
-Apple Screen Sharing. Default builds enable it at `0.0.0.0:3389`, on all IPv4
-interfaces. Builds with `--no-default-features` omit RDP.
+Apple Screen Sharing. Default builds enable it on port 3389 at the Apple listen
+address, which is `0.0.0.0` unless you changed it. Builds with `--no-default-features` omit RDP.
 
 Connection steps are in the [Windows App and mstsc](connect/windows-app.md) and
 [FreeRDP](connect/freerdp.md) quickstarts. The [client matrix](clients.md) records
@@ -15,7 +15,7 @@ The `[rdp]` table in `~/.config/wayshare/config.toml` accepts these keys:
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` in default builds | Enables the TLS RDP listener |
-| `listen` | `"0.0.0.0:3389"` | Listen address and port, independent of top-level Apple `listen` |
+| `listen` | Top-level `listen` address, port 3389 | Listen address and port |
 | `codec` | `"auto"` | Graphics selection. Values below |
 | `identity_file` | Config directory's `rdp-identity.pem` | Absolute path to a PEM certificate and private key |
 

@@ -107,8 +107,8 @@ impl ServeArgs {
             s.listen = v;
         }
         s.rdp.enabled = flag(self.rdp, self.no_rdp, s.rdp.enabled);
-        if let Some(v) = self.rdp_listen {
-            s.rdp.listen = v;
+        if self.rdp_listen.is_some() {
+            s.rdp.listen = self.rdp_listen;
         }
         if self.rdp_identity_file.is_some() {
             s.rdp.identity_file = self.rdp_identity_file;
@@ -378,7 +378,7 @@ async fn run(s: Settings) -> Result<()> {
                 None => wayshare::config::config_dir()?.join("rdp-identity.pem"),
             };
             wayshare::rdp::serve(
-                s.rdp.listen,
+                s.rdp_listen(),
                 &identity,
                 cfg.frame_source.clone(),
                 cfg.input.clone(),
@@ -478,7 +478,7 @@ mod tests {
                 srp_file: Some(srp),
                 ..Settings::default()
             };
-            settings.rdp.listen = rdp_address;
+            settings.rdp.listen = Some(rdp_address);
             settings.rdp.identity_file = Some(if failure == "uncreatable-tls" {
                 identity.join("child.pem")
             } else {
@@ -544,7 +544,7 @@ mod tests {
         .unwrap();
         cli.serve.apply(&mut settings);
         assert!(!settings.rdp.enabled);
-        assert_eq!(settings.rdp.listen.port(), 13389);
+        assert_eq!(settings.rdp_listen().port(), 13389);
         assert_eq!(
             settings.rdp.identity_file,
             Some(PathBuf::from("/tmp/test-rdp.pem"))

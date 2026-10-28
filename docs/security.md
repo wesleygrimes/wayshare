@@ -1,7 +1,7 @@
 # Security
 
 wayshare accepts Apple Screen Sharing and RDP connections on your LAN or VPN.
-Both listeners default to all IPv4 interfaces. Router port forwarding exposes
+Both listeners default to all IPv4 interfaces, and RDP follows the Apple address. Router port forwarding exposes
 these services to the internet. A VPN such as [Tailscale](https://tailscale.com)
 provides remote access without port forwarding.
 
@@ -75,9 +75,9 @@ A certificate the client trusts, with the right hostnames and a PKCS#8 key in
 
 ## VPN access
 
-The network choice in `wayshare setup` controls Apple Screen Sharing only.
-Selecting `tailscale0` restricts that listener. RDP remains on all IPv4 interfaces
-unless `[rdp] listen` names your Tailscale address, such as `100.x.y.z:3389`.
+The network choice in `wayshare setup` applies to both protocols. Selecting
+`tailscale0` binds Apple Screen Sharing to your Tailscale address and RDP to the
+same address on port 3389. An explicit `[rdp] listen` overrides this.
 `[rdp] enabled = false` turns RDP off.
 
 Tailscale must be up before wayshare binds its address. An Apple listener bind

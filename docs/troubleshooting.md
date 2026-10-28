@@ -81,10 +81,10 @@ High Performance page. RDP has no sound support.
 
 ### The connection is refused or times out
 
-Check the startup log for `RDP listener ready`. Default builds enable RDP at
-`0.0.0.0:3389`. If you turned it off, remove `--no-rdp` or set `[rdp] enabled = true`.
-If `rdp.listen` uses loopback, set it to your LAN or VPN address. The top-level
-`listen` setting controls Apple Screen Sharing only.
+Check the startup log for `RDP listener ready`. Default builds enable RDP on port
+3389 at the Apple listen address. If you turned it off, remove `--no-rdp` or set `[rdp] enabled = true`.
+If RDP uses loopback, set `[rdp] listen` or the top-level `listen` to your LAN
+or VPN address.
 
 For `RDP disabled`, follow the logged repair message. A missing SRP record needs
 `wayshare set-password`. A TLS identity error needs a valid `rdp.identity_file`

@@ -110,7 +110,7 @@ enabled = true
 
 ## RDP
 
-Default builds enable RDP on `0.0.0.0:3389`. The `[rdp]` settings are `enabled`,
-`listen`, `codec`, and `identity_file`. Top-level `listen` controls Apple Screen
-Sharing only. See the [RDP settings reference](rdp.md#settings) for defaults,
+Default builds enable RDP on port 3389 at the top-level `listen` address. The
+`[rdp]` settings are `enabled`, `listen`, `codec`, and `identity_file`. Set
+`[rdp] listen` to give RDP its own address. See the [RDP settings reference](rdp.md#settings) for defaults,
 accepted values, and command-line overrides.

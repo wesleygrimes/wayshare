@@ -33,7 +33,9 @@ pub struct Settings {
 #[serde(default, deny_unknown_fields)]
 pub struct RdpSettings {
     pub enabled: bool,
-    pub listen: SocketAddr,
+    /// Unset: the Apple `listen` address on port 3389, so restricting Apple to a VPN or
+    /// loopback address also restricts RDP. Read it with [`Settings::rdp_listen`].
+    pub listen: Option<SocketAddr>,
     /// PEM certificate and private key. Defaults to the config directory.
     pub identity_file: Option<PathBuf>,
     pub codec: RdpCodec,
@@ -54,7 +56,7 @@ impl Default for RdpSettings {
     fn default() -> Self {
         Self {
             enabled: cfg!(feature = "rdp"),
-            listen: "0.0.0.0:3389".parse().unwrap(),
+            listen: None,
             identity_file: None,
             codec: RdpCodec::Auto,
         }
@@ -189,7 +191,17 @@ pub fn default_srp_path(user: &str) -> Result<PathBuf> {
     Ok(config_dir()?.join(format!("srp-{user}")))
 }
 
+/// RDP's port when `[rdp] listen` is unset.
+pub const DEFAULT_RDP_PORT: u16 = 3389;
+
 impl Settings {
+    /// The RDP listen address: `[rdp] listen`, or the Apple listen address on port 3389.
+    pub fn rdp_listen(&self) -> SocketAddr {
+        self.rdp
+            .listen
+            .unwrap_or_else(|| SocketAddr::new(self.listen.ip(), DEFAULT_RDP_PORT))
+    }
+
     /// Encoder settings for HP, as the encode module expects them.
     pub fn video_encoder(&self) -> crate::encode::EncoderConfig {
         use crate::encode::{Chroma as C, EncoderBackend as B, EncoderConfig};
@@ -291,13 +303,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rdp_follows_the_apple_address_unless_set() {
+        // A 0.2.4 config has no [rdp] table; restricting Apple must restrict RDP too.
+        for (config, rdp) in [
+            ("", "0.0.0.0:3389"),
+            ("listen = \"100.64.0.1:5900\"", "100.64.0.1:3389"),
+            ("listen = \"127.0.0.1:5901\"", "127.0.0.1:3389"),
+            ("listen = \"[::]:5900\"", "[::]:3389"),
+            ("listen = \"[fd7a::1]:5900\"", "[fd7a::1]:3389"),
+            (
+                "listen = \"100.64.0.1:5900\"\n[rdp]\ncodec = 'h264'",
+                "100.64.0.1:3389",
+            ),
+            (
+                "listen = \"100.64.0.1:5900\"\n[rdp]\nlisten = \"0.0.0.0:3390\"",
+                "0.0.0.0:3390",
+            ),
+        ] {
+            let s = Settings::parse(config).unwrap();
+            assert_eq!(s.rdp_listen(), rdp.parse().unwrap(), "{config}");
+        }
+    }
+
+    #[test]
     fn defaults_suit_the_real_setup() {
         let s = Settings::parse("").unwrap();
         assert_eq!(s, Settings::default());
         assert!(s.hp.enabled && s.input.enabled && s.resize && s.mdns.enabled);
         assert!(!s.exclusive);
         assert_eq!(s.rdp.enabled, cfg!(feature = "rdp"));
-        assert_eq!(s.rdp.listen, "0.0.0.0:3389".parse().unwrap());
+        assert_eq!(s.rdp_listen(), "0.0.0.0:3389".parse().unwrap());
         assert!(
             !Settings::parse("[rdp]\nenabled = false")
                 .unwrap()

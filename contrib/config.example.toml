@@ -19,7 +19,7 @@ audio = true                          # stream the default sink monitor (AAC-ELD
 [rdp]
 codec = "auto"                        # auto | h264 | remotefx; h264 also permits fallback
 enabled = true                        # TLS and shared Apple login; false turns RDP off
-listen = "0.0.0.0:3389"                # all IPv4 interfaces; independent of the RFB listen address
+# listen = "100.64.0.1:3389"           # unset: the RFB listen address on port 3389
 # Set a LAN or Tailscale address to restrict access. RDP requires a readable SRP record.
 # SRP or TLS identity errors leave RDP off while Apple RFB keeps listening.
 # Setup offers ufw rules for both ports. Existing setups must allow TCP 3389 or rerun setup.

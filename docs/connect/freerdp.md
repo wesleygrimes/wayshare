@@ -34,6 +34,6 @@
 You see your shared Hyprland desktop and can control it. FreeRDP connections are
 tested. Live resize and rotation remain unverified with this client.
 
-RDP is on by default at `0.0.0.0:3389`. It has no clipboard or sound. For codec
+RDP is on by default on port 3389. It has no clipboard or sound. For codec
 options, see [RDP graphics](../rdp.md#graphics). For connection problems, follow
 [RDP troubleshooting](../troubleshooting.md#rdp).

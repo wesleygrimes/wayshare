@@ -80,12 +80,11 @@ pub fn run() -> Result<()> {
     let bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == listen.ip());
     let ip = bound.map(|a| a.ip).or_else(lan_ipv4);
     firewall_step(listen, bound, ip, &addrs)?;
-    if settings.rdp.enabled && !settings.rdp.listen.ip().is_loopback() {
-        let rdp_bound = addrs
-            .iter()
-            .find(|a| IpAddr::V4(a.ip) == settings.rdp.listen.ip());
+    let rdp_listen = settings.rdp_listen();
+    if settings.rdp.enabled && !rdp_listen.ip().is_loopback() {
+        let rdp_bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == rdp_listen.ip());
         let rdp_ip = rdp_bound.map(|a| a.ip).or_else(lan_ipv4);
-        firewall_step(settings.rdp.listen, rdp_bound, rdp_ip, &addrs)?;
+        firewall_step(rdp_listen, rdp_bound, rdp_ip, &addrs)?;
     }
 
     let name = settings.name.clone().unwrap_or_else(hostname);
