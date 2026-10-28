@@ -24,11 +24,12 @@ the distro library.
 
 ## Install
 
-Release archives include `THIRD-PARTY-LICENSES`. Install it under
+The source tree and release archives include `THIRD-PARTY-LICENSES`. Install it under
 `/usr/share/licenses/wayshare/` with the package.
 
 ```sh
 install -Dm755 target/release/wayshare "$pkgdir/usr/bin/wayshare"
+install -Dm644 THIRD-PARTY-LICENSES "$pkgdir/usr/share/licenses/wayshare/THIRD-PARTY-LICENSES"
 sed 's|@bindir@|/usr/bin|' contrib/wayshare.service.in > wayshare.service
 install -Dm644 wayshare.service "$pkgdir/usr/lib/systemd/user/wayshare.service"
 install -Dm644 contrib/config.example.toml "$pkgdir/usr/share/doc/wayshare/config.example.toml"

@@ -76,12 +76,8 @@ jobs:
           persist-credentials: false
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libegl-dev libgbm-dev
       - run: rustup toolchain install
-      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
-        env:
-          MISE_DISABLE_TOOLS: cargo:bindgen-cli
       - run: cargo test --locked
       - run: cargo build --release --locked
-      - run: mise run licenses
       - name: Package
         run: |
           name=wayshare-${{ matrix.target }}

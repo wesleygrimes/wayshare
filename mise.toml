@@ -74,8 +74,12 @@ description = "Check dependency advisories, licenses and sources (needs network)
 run = ["cargo deny --locked check", "cargo deny --locked --all-features check"]
 
 [tasks.licenses]
-description = "Write THIRD-PARTY-LICENSES for the release archives"
-run = "cargo about generate --locked --fail about.hbs -o THIRD-PARTY-LICENSES"
+description = "Regenerate THIRD-PARTY-LICENSES, then commit it"
+run = "tools/licenses.sh"
+
+[tasks."licenses:check"]
+description = "Check that THIRD-PARTY-LICENSES is up to date"
+run = "tools/licenses.sh --check"
 
 [tasks.changelog]
 description = "Preview the unreleased release notes on stdout; writes nothing"
