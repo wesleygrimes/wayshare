@@ -20,7 +20,7 @@ wayshare now works with RDP clients as well as Mac Screen Sharing.
 ### Fixes
 
 - **hp:** a VA-API bitrate overshoot no longer ends a High Performance stream. wayshare keeps the frame and logs one warning. ([#76](https://github.com/wesleygrimes/wayshare/pull/76))
-- setup and doctor recognize more kinds of ufw rules, such as port ranges, `limit`, app profiles and subnet rules, and respect rule order. ([#76](https://github.com/wesleygrimes/wayshare/pull/76))
+- setup and doctor recognize more kinds of ufw rules, such as port ranges, `limit`, app profiles and subnet rules. A deny that covers all connections now hides a later allow. ([#76](https://github.com/wesleygrimes/wayshare/pull/76))
 - **build:** `tools/check-system-deps.sh` now lists `gcc-c++` on Fedora, which OpenH264 needs.
 
 ### Documentation
