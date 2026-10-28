@@ -111,12 +111,12 @@ enabled = true
 ## RDP
 
 Default builds include RDP with TLS, the Apple mode username and password, and input.
-The runtime listener stays disabled, with `127.0.0.1:3389` as its default address.
+The listener defaults to `0.0.0.0:3389` on all IPv4 interfaces.
 
 ```toml
 [rdp]
-enabled = false
-listen = "127.0.0.1:3389"
+enabled = true
+listen = "0.0.0.0:3389"
 codec = "auto"
 # identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
 ```
@@ -128,11 +128,16 @@ forces the legacy codec path.
 `"egfx-remotefx"` opts into experimental RemoteFX over EGFX. It causes protocol
 errors in the iOS Windows App and is excluded from auto selection.
 
-For remote access, set `enabled = true` and `listen = "0.0.0.0:3389"`, or choose one
-LAN or Tailscale address. A non-loopback listener requires Apple mode credentials;
-startup fails otherwise. Use the exact Apple mode username and an empty domain.
+Set `[rdp] enabled = false` or pass `--no-rdp` to turn it off. Choose one LAN or
+Tailscale address to restrict RDP. Top-level `listen` only controls Apple RFB.
+A missing or unreadable SRP record or unusable TLS identity disables RDP with a
+repair message. Apple RFB keeps listening. Run `wayshare set-password` for SRP
+errors, or fix `identity_file` and its directory permissions for TLS errors.
+Use the exact Apple mode username and an empty domain.
 Startup logs the bound address and certificate SHA-256 fingerprint as colon-separated hex bytes. Compare it with the client's SHA-256
-certificate details before sending a password, and allow the TCP port in your firewall.
+certificate details before sending a password. Setup offers ufw rules for TCP 5900
+and the enabled RDP port. Existing setups must rerun setup or allow TCP 3389
+themselves, only from the LAN or VPN.
 See [RDP](rdp.md) for shared credentials, username policy and limitations, including
 client-size capture and Display Control resizing. `--no-default-features` omits RDP from
 the build.

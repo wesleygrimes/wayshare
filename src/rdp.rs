@@ -62,11 +62,16 @@ async fn serve_local(
     codec: RdpCodec,
 ) -> Result<()> {
     ensure!(
-        !auth.security_types().is_empty(),
-        "RDP requires Apple mode credentials"
+        auth.srp.is_some(),
+        "RDP requires a readable SRP record; run `wayshare set-password`"
     );
     let auth = Arc::new(auth);
-    let (tls, fingerprint) = tls_acceptor(identity)?;
+    let (tls, fingerprint) = tls_acceptor(identity).with_context(|| {
+        format!(
+            "loading or creating RDP TLS identity {}",
+            identity.display()
+        )
+    })?;
     let probe = frames.clone();
     let (width, height) =
         tokio::task::spawn_blocking(move || Ok::<_, anyhow::Error>(probe()?.size())).await??;
@@ -80,7 +85,6 @@ async fn serve_local(
     let listener = bind_listener(listen, Some(&auth)).await?;
     let bound = listener.local_addr()?;
     let mut sessions = tokio::task::JoinSet::new();
-    let mut peers = transport::Peers::default();
     info!(listen = %bound, "RDP listener ready with TLS and shared Apple credentials");
     info!(sha256 = %fingerprint, "RDP TLS certificate fingerprint (SHA-256, colon-separated hex)");
     // RFB allocates low IDs; reserve the upper half for RDP display ownership.

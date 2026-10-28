@@ -2,24 +2,32 @@
 
 RDP streams the shared monitor over TLS with H.264/AVC420, Planar, legacy RemoteFX
 or bitmap updates. It uses the same username and password as Apple Screen Sharing.
-Default builds include RDP, but its listener is disabled until enabled in config.
+Default builds enable RDP on `0.0.0.0:3389`, on all IPv4 interfaces.
 Build with `--no-default-features` to omit it.
 
-## Enable the listener
+## Configure the listener
 
 ```toml
 [rdp]
 enabled = true
-listen = "127.0.0.1:3389"
+listen = "0.0.0.0:3389"
 codec = "auto"
 # identity_file = "/home/alice/.config/wayshare/rdp-identity.pem"
 ```
 
 `--rdp`, `--no-rdp`, `--rdp-listen` and `--rdp-identity-file` override these settings.
-For remote access, choose a LAN or Tailscale address, or use `0.0.0.0:3389`.
+Set `[rdp] enabled = false` or pass `--no-rdp` to turn it off.
+Choose a LAN or Tailscale address to restrict which interfaces accept RDP.
+The top-level RFB `listen` setting does not restrict the RDP listener.
 `[::]:3389` binds IPv6; IPv4 access depends on the host's socket policy.
-Startup requires Apple mode credentials. Allow the chosen TCP port through your
-firewall. RDP has no discovery advertisement.
+Startup requires a readable SRP record and a usable TLS identity. If either fails,
+wayshare logs the reason and leaves RDP off while Apple RFB keeps listening. Run
+`wayshare set-password` to create or replace the SRP record, or fix `identity_file`
+and its directory permissions for TLS errors. Restart after fixing the problem.
+Without credentials, Apple RFB also refuses login.
+Setup offers ufw rules for TCP 5900 and the enabled RDP port, normally TCP 3389.
+Existing setups must rerun setup or allow TCP 3389 themselves, only from the LAN
+or VPN. RDP has no discovery advertisement.
 
 ## Login and TLS
 
@@ -28,13 +36,15 @@ The username need not be a Linux account. Both protocols load the same `srp_file
 which defaults to `$XDG_CONFIG_HOME/wayshare/srp-$USER` or
 `~/.config/wayshare/srp-$USER`. It stores a salt and verifier, not a password.
 RDP verifies the submitted password against that record. Restart after changing it.
-The development ARD credentials also work when configured. There is no PAM,
-keyring, NLA, CredSSP or smart-card login in this adapter.
+The development ARD credentials also work when configured, but RDP still requires
+a readable SRP record at startup. There is no PAM, keyring, NLA, CredSSP or
+smart-card login in this adapter.
 
 Credentials must pass before capture updates or input start. Failed attempts wait
 at least two seconds. At most eight connections are admitted, with a 30-second
-login deadline. Password verification runs on blocking workers. Submitted passwords
-are not saved or logged; owned validation copies and decoded credentials are cleared
+login deadline. Pre-login input is capped at 256 packets and 1 MiB. Exceeding either
+limit drops the connection. Password verification runs on blocking workers.
+Submitted passwords are not saved or logged. Owned validation copies and decoded credentials are cleared
 after use, including cancellation. This does not erase every temporary memory copy.
 
 After activation and successful login, the server sends Save Session Info once,

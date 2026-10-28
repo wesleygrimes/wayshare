@@ -53,8 +53,8 @@ pub enum RdpCodec {
 impl Default for RdpSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
-            listen: "127.0.0.1:3389".parse().unwrap(),
+            enabled: cfg!(feature = "rdp"),
+            listen: "0.0.0.0:3389".parse().unwrap(),
             identity_file: None,
             codec: RdpCodec::Auto,
         }
@@ -296,8 +296,14 @@ mod tests {
         assert_eq!(s, Settings::default());
         assert!(s.hp.enabled && s.input.enabled && s.resize && s.mdns.enabled);
         assert!(!s.exclusive);
-        assert!(!s.rdp.enabled);
-        assert_eq!(s.rdp.listen, "127.0.0.1:3389".parse().unwrap());
+        assert_eq!(s.rdp.enabled, cfg!(feature = "rdp"));
+        assert_eq!(s.rdp.listen, "0.0.0.0:3389".parse().unwrap());
+        assert!(
+            !Settings::parse("[rdp]\nenabled = false")
+                .unwrap()
+                .rdp
+                .enabled
+        );
         assert_eq!(s.listen.port(), 5900);
         assert_eq!(s.keyboard().unwrap().command, ModTarget::Super);
     }
