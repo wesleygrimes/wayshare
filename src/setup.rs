@@ -424,7 +424,7 @@ pub fn firewall(listen: SocketAddr) -> Firewall {
         return Firewall::Off;
     }
     match std::fs::read_to_string(ufw_rules_file(listen)) {
-        Ok(rules) if ufw_allows(&rules, listen.port()) => Firewall::Allows,
+        Ok(rules) if ufw_allows(&rules, listen) => Firewall::Allows,
         Ok(_) => Firewall::Blocks,
         Err(_) => Firewall::Unknown,
     }
@@ -443,30 +443,90 @@ fn ufw_enabled(conf: &str) -> bool {
         .any(|l| l.trim().eq_ignore_ascii_case("ENABLED=yes"))
 }
 
-/// Looks for an allow rule for `port` in ufw's `user.rules` tuple comments, e.g.
+/// One `### tuple ###` comment from ufw's `user.rules`, e.g.
 /// `### tuple ### allow tcp 5900 0.0.0.0/0 any 192.168.1.0/24 in`. The fields are action,
 /// protocol, destination port, destination, source port, source, optional destination and
 /// source app names, and direction, then an optional `comment=`. This mirrors ufw's own
 /// reader in `backend_iptables.py`.
-fn ufw_allows(rules: &str, port: u16) -> bool {
-    rules.lines().any(|l| {
-        let Some(tuple) = l.trim().strip_prefix("### tuple ###") else {
-            return false;
-        };
+struct UfwRule<'a> {
+    /// `allow`, `limit`, `deny` or `reject`, without a `_log` or `_log-all` suffix.
+    action: &'a str,
+    proto: &'a str,
+    port: &'a str,
+    dst: &'a str,
+    direction: &'a str,
+}
+
+impl<'a> UfwRule<'a> {
+    fn parse(line: &'a str) -> Option<Self> {
+        let tuple = line.trim().strip_prefix("### tuple ###")?;
         let tuple = tuple.split(" comment=").next().unwrap_or_default();
         let f: Vec<&str> = tuple.split_whitespace().collect();
         if !matches!(f.len(), 7 | 9) {
-            return false;
+            return None;
         }
-        // `allow_log` and `allow_log-all` come from `ufw allow log`; `limit` still accepts.
-        // Route rules (`route:allow`) apply to forwarded traffic, not this host.
-        let action = f[0].split('_').next().unwrap_or_default();
-        let direction = f[f.len() - 1];
-        matches!(action, "allow" | "limit")
-            && matches!(f[1], "tcp" | "any")
-            && ufw_port_matches(f[2], port)
-            && direction.starts_with("in")
-    })
+        Some(Self {
+            // Route rules (`route:allow`) apply to forwarded traffic and keep their prefix,
+            // so they never match an action below.
+            action: f[0].split('_').next().unwrap_or_default(),
+            proto: f[1],
+            port: f[2],
+            dst: f[3],
+            direction: f[f.len() - 1],
+        })
+    }
+
+    /// Whether the rule applies to some inbound TCP traffic for `listen`. A listener on an
+    /// unspecified address accepts traffic for every local address, so any destination
+    /// counts; otherwise the destination must contain the listener's address.
+    fn reaches(&self, listen: SocketAddr) -> bool {
+        matches!(self.proto, "tcp" | "any")
+            && ufw_port_matches(self.port, listen.port())
+            && self.direction.starts_with("in")
+            && (listen.ip().is_unspecified() || ufw_net_contains(self.dst, listen.ip()))
+    }
+}
+
+/// Looks for a ufw allow rule that reaches `listen`. `limit` rules accept too.
+fn ufw_allows(rules: &str, listen: SocketAddr) -> bool {
+    rules
+        .lines()
+        .filter_map(UfwRule::parse)
+        .any(|r| matches!(r.action, "allow" | "limit") && r.reaches(listen))
+}
+
+/// Matches a ufw address field: `any`, an address, or an address with a prefix length.
+fn ufw_net_contains(field: &str, ip: IpAddr) -> bool {
+    if field == "any" {
+        return true;
+    }
+    let (net, prefix) = match field.split_once('/') {
+        Some((net, prefix)) => match prefix.parse::<u32>() {
+            Ok(prefix) => (net, Some(prefix)),
+            Err(_) => return false,
+        },
+        None => (field, None),
+    };
+    match (net.parse::<IpAddr>(), ip) {
+        (Ok(IpAddr::V4(net)), IpAddr::V4(ip)) => prefix_matches(
+            net.to_bits().into(),
+            ip.to_bits().into(),
+            prefix.unwrap_or(32),
+            32,
+        ),
+        (Ok(IpAddr::V6(net)), IpAddr::V6(ip)) => {
+            prefix_matches(net.to_bits(), ip.to_bits(), prefix.unwrap_or(128), 128)
+        }
+        _ => false,
+    }
+}
+
+fn prefix_matches(net: u128, ip: u128, prefix: u32, bits: u32) -> bool {
+    if prefix > bits {
+        return false;
+    }
+    let shift = bits - prefix;
+    shift >= bits || net >> shift == ip >> shift
 }
 
 /// Matches a ufw port field: `any`, one port, a `low:high` range, or a comma-separated list
@@ -577,6 +637,10 @@ mod tests {
         assert_eq!(subnet(ip, 0), "0.0.0.0/0");
     }
 
+    fn any4(port: u16) -> SocketAddr {
+        SocketAddr::from(([0, 0, 0, 0], port))
+    }
+
     #[test]
     fn reads_ufw_state() {
         assert!(ufw_enabled("# comment\nENABLED=yes\nLOGLEVEL=low\n"));
@@ -584,27 +648,27 @@ mod tests {
         let rules = "### tuple ### allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in\n\
                      -A ufw-user-input -p tcp --dport 22 -j ACCEPT\n\
                      ### tuple ### allow tcp 5900 0.0.0.0/0 any 192.168.1.0/24 in\n";
-        assert!(ufw_allows(rules, 5900));
-        assert!(!ufw_allows(rules, 5901));
+        assert!(ufw_allows(rules, any4(5900)));
+        assert!(!ufw_allows(rules, any4(5901)));
         assert!(!ufw_allows(
             "### tuple ### deny tcp 5900 0.0.0.0/0 any 0.0.0.0/0 in\n",
-            5900
+            any4(5900)
         ));
         assert!(ufw_allows(
             "### tuple ### allow any 5900 0.0.0.0/0 any 0.0.0.0/0 in\n",
-            5900
+            any4(5900)
         ));
         assert!(ufw_allows(
             "### tuple ### allow tcp 5900 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0\n",
-            5900
+            any4(5900)
         ));
         assert!(!ufw_allows(
             "### tuple ### allow tcp 5900 0.0.0.0/0 any 0.0.0.0/0 out\n",
-            5900
+            any4(5900)
         ));
         assert!(ufw_allows(
             "### tuple ### allow tcp 5900 0.0.0.0/0 any 192.168.1.0/24 in comment=6d6163\n",
-            5900
+            any4(5900)
         ));
     }
 
@@ -634,10 +698,9 @@ mod tests {
             "limit tcp 3389 0.0.0.0/0 any 0.0.0.0/0 in",
             "allow any any 0.0.0.0/0 any 192.168.1.0/24 in",
             "allow tcp 3389 0.0.0.0/0 any 0.0.0.0/0 RDP - in",
-            "allow tcp 3389 ::/0 any ::/0 in",
         ] {
             assert!(
-                ufw_allows(&format!("### tuple ### {rule}\n"), 3389),
+                ufw_allows(&format!("### tuple ### {rule}\n"), any4(3389)),
                 "{rule}"
             );
         }
@@ -652,9 +715,27 @@ mod tests {
             "allow tcp 3389 0.0.0.0/0 any",
         ] {
             assert!(
-                !ufw_allows(&format!("### tuple ### {rule}\n"), 3389),
+                !ufw_allows(&format!("### tuple ### {rule}\n"), any4(3389)),
                 "{rule}"
             );
         }
+    }
+
+    #[test]
+    fn matches_the_ufw_rule_destination_to_the_listener() {
+        let lan_only = "### tuple ### allow any any 192.168.1.50 any 192.168.1.0/24 in\n";
+        let to = |a: &str| a.parse::<SocketAddr>().unwrap();
+        assert!(ufw_allows(lan_only, to("192.168.1.50:3389")));
+        assert!(ufw_allows(lan_only, to("0.0.0.0:3389")));
+        assert!(!ufw_allows(lan_only, to("100.64.0.1:3389")));
+        let subnet = "### tuple ### allow tcp 3389 192.168.1.0/24 any 0.0.0.0/0 in\n";
+        assert!(ufw_allows(subnet, to("192.168.1.50:3389")));
+        assert!(!ufw_allows(subnet, to("10.0.0.5:3389")));
+        let v6 = "### tuple ### allow tcp 3389 ::/0 any ::/0 in\n";
+        assert!(ufw_allows(v6, to("[::]:3389")));
+        assert!(ufw_allows(v6, to("[fd00::5]:3389")));
+        let v6_host = "### tuple ### allow tcp 3389 fd00::5 any ::/0 in\n";
+        assert!(ufw_allows(v6_host, to("[fd00::5]:3389")));
+        assert!(!ufw_allows(v6_host, to("[fd00::6]:3389")));
     }
 }
