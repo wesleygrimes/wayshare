@@ -113,9 +113,12 @@ Suppress Output pauses graphics while control traffic continues and capture
 retains dirty state. Layouts apply during suppression; resume sends a full fresh
 frame. Refresh Rect requests a redraw without clearing suppression. Suppression
 does not start a recovery probe or close timer. The five-second output watchdog
-closes clients that stop reading. A new connection from the same IP replaces the
-old session. Legacy capture coalesces frames while an update or socket backlog
-is pending.
+closes clients that stop reading on Linux. New connections never replace existing
+sessions, including connections from the same IP. Authenticated viewers may connect
+concurrently, as in Apple RFB mode. Each connection has its own session ID. Viewers
+share desktop focus, and the first session to change the output mode owns it until
+disconnect. Exclusive display mode restores other monitors after the last viewer
+leaves. Legacy capture coalesces frames while an update or socket backlog is pending.
 
 Keyboard scancodes and Unicode input use the shared input sink. PC modifiers
 bypass Mac Command/Option remapping. Absolute and relative pointer movement, five

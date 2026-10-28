@@ -24,6 +24,8 @@ impl Encoder {
             Ok(encoder) => return Ok(Self::Vaapi(Box::new(encoder))),
             Err(error) => tracing::debug!(%error, "RDP VA-API H.264 unavailable; trying OpenH264"),
         }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (width, height);
         Self::software()
     }
 

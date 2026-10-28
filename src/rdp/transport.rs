@@ -1,16 +1,16 @@
 //! Socket backlog bounds capture work and detects clients that stop reading.
 
-use std::collections::HashMap;
-use std::net::IpAddr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use tokio::task::AbortHandle;
+#[cfg(target_os = "linux")]
 use tracing::info;
 
 const MAX_BACKLOG: usize = 64 * 1024;
+#[cfg(target_os = "linux")]
 const STALL: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
@@ -30,42 +30,12 @@ impl Output {
     }
 }
 
-#[derive(Default)]
-pub(super) struct Peers(HashMap<IpAddr, Peer>);
-
-pub(super) struct Peer {
-    task: AbortHandle,
-    socket: Weak<std::net::TcpStream>,
-}
-
-impl Peer {
-    pub fn abort(self) {
-        if let Some(socket) = self.socket.upgrade() {
-            reset_on_close(&socket);
-        }
-        self.task.abort();
-    }
-}
-
+#[cfg(target_os = "linux")]
 pub(super) fn reset_on_close(socket: &std::net::TcpStream) {
     // FIN waits behind queued graphics and cannot reach a zero-window client.
-    // Reset stalled and replaced sessions so the client sees RST immediately.
+    // Reset stalled sessions so the client sees RST immediately.
     if let Err(error) = socket2::SockRef::from(socket).set_linger(Some(Duration::ZERO)) {
         tracing::warn!(%error, "RDP abortive close setup failed");
-    }
-}
-
-impl Peers {
-    pub fn reap(&mut self) {
-        self.0.retain(|_, task| !task.task.is_finished());
-    }
-
-    pub fn remove(&mut self, ip: IpAddr) -> Option<Peer> {
-        self.0.remove(&ip)
-    }
-
-    pub fn insert(&mut self, ip: IpAddr, task: AbortHandle, socket: Weak<std::net::TcpStream>) {
-        self.0.insert(ip, Peer { task, socket });
     }
 }
 
@@ -76,11 +46,13 @@ pub(super) fn socket_monitor(stream: &tokio::net::TcpStream) -> Result<Arc<std::
     Ok(Arc::new(socket.try_clone()?.into()))
 }
 
+#[cfg(target_os = "linux")]
 struct Progress {
     previous: usize,
     since: Instant,
 }
 
+#[cfg(target_os = "linux")]
 impl Progress {
     fn new(now: Instant) -> Self {
         Self {
@@ -156,6 +128,7 @@ mod tests {
         assert!(flow.refresh.load(Ordering::Acquire));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn watchdog_requires_five_seconds_without_progress() {
         let now = Instant::now();
@@ -167,21 +140,5 @@ mod tests {
         assert_eq!(p.observe(90, now + STALL * 2), Some(STALL));
         assert_eq!(p.observe(0, now + STALL * 3), None);
         assert_eq!(p.observe(100, now + STALL * 4), None);
-    }
-
-    #[tokio::test]
-    async fn same_peer_replaces_only_its_old_session() {
-        let a = tokio::spawn(std::future::pending::<()>());
-        let b = tokio::spawn(std::future::pending::<()>());
-        let mut peers = Peers::default();
-        let ip = "127.0.0.1".parse().unwrap();
-        let other = "127.0.0.2".parse().unwrap();
-        peers.insert(ip, a.abort_handle(), Weak::new());
-        peers.insert(other, b.abort_handle(), Weak::new());
-        peers.remove(ip).unwrap().abort();
-        assert!(a.await.unwrap_err().is_cancelled());
-        assert!(!b.is_finished());
-        assert!(peers.remove(ip).is_none());
-        b.abort();
     }
 }

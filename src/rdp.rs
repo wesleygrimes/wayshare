@@ -89,16 +89,8 @@ async fn serve_local(
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, peer) = accepted?;
-                peers.reap();
-                let replacing = if let Some(old) = peers.remove(peer.ip()) {
-                    info!(%peer, "RDP same-peer connection replacing stale session");
-                    old.abort();
-                    // Drop capture and restore the old display before the new login resizes it.
-                    tokio::task::yield_now().await;
-                    true
-                } else { false };
                 // Bound unauthenticated handshakes and credential workers as well as sessions.
-                if !replacing && sessions.len() >= 8 { drop(stream); continue; }
+                if sessions.len() >= 8 { drop(stream); continue; }
                 let flow = Arc::new(transport::Output::default());
                 let socket = match transport::socket_monitor(&stream) {
                     Ok(socket) => socket,
@@ -139,8 +131,7 @@ async fn serve_local(
                     .build();
                 let span = tracing::info_span!("rdp", %peer, session);
                 session += 1;
-                let peer_socket = Arc::downgrade(&socket);
-                let task = sessions.spawn_local(async move {
+                sessions.spawn_local(async move {
                     // An idle pre-login client cannot occupy a slot indefinitely.
                     let deadline = async {
                         tokio::time::sleep(Duration::from_secs(30)).await;
@@ -157,7 +148,6 @@ async fn serve_local(
                         },
                     }
                 }.instrument(span));
-                peers.insert(peer.ip(), task, peer_socket);
             },
             Some(result) = sessions.join_next(), if !sessions.is_empty() => {
                 if let Err(error) = result && !error.is_cancelled() {
@@ -752,6 +742,65 @@ impl Drop for Updates {
 mod tests {
     use super::*;
     use crate::source::TestPattern;
+
+    #[tokio::test]
+    async fn unauthenticated_connections_never_evict_existing_connections() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio::time::{sleep, timeout};
+
+        let reserved = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = reserved.local_addr().unwrap();
+        drop(reserved);
+        let dir =
+            std::env::temp_dir().join(format!("wayshare-rdp-peers-{}", rand::random::<u64>()));
+        let identity = dir.join("identity.pem");
+        let auth = AuthConfig {
+            srp: Some(crate::rfb::srp::VerifierRecord::generate(
+                "viewer", b"test", 4,
+            )),
+            dh: None,
+        };
+        let frames: FrameSourceFactory =
+            Arc::new(|| Ok(Box::new(crate::source::TestPattern::new(256, 256))));
+        // X.224 requests TLS, but none of these clients starts TLS or sends credentials.
+        async fn negotiate(stream: &mut TcpStream) {
+            stream
+                .write_all(&[3, 0, 0, 19, 14, 0xe0, 0, 0, 0, 0, 0, 1, 0, 8, 0, 1, 0, 0, 0])
+                .await
+                .unwrap();
+            let mut response = [0; 19];
+            stream.read_exact(&mut response).await.unwrap();
+            assert_eq!(&response[..4], &[3, 0, 0, 19]);
+        }
+        let clients = async {
+            let mut first = loop {
+                match TcpStream::connect(address).await {
+                    Ok(stream) => break stream,
+                    Err(_) => sleep(Duration::from_millis(10)).await,
+                }
+            };
+            negotiate(&mut first).await;
+            let mut others = Vec::new();
+            for _ in 0..7 {
+                let mut second = TcpStream::connect(address).await.unwrap();
+                negotiate(&mut second).await;
+                others.push(second);
+            }
+            let mut excess = TcpStream::connect(address).await.unwrap();
+            assert_eq!(excess.read(&mut [0]).await.unwrap(), 0);
+            assert!(
+                timeout(Duration::from_millis(100), first.read(&mut [0]))
+                    .await
+                    .is_err()
+            );
+        };
+        tokio::select! {
+            result = serve(address, &identity, frames, None, None, auth, RdpCodec::Remotefx) => panic!("server ended: {result:?}"),
+            result = timeout(Duration::from_secs(5), clients) => result.unwrap(),
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     async fn completed_update(
         updates: &mut Box<dyn RdpServerDisplayUpdates>,
