@@ -1,0 +1,88 @@
+accepted = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "BSD-2-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# The bundled Cisco code keeps its license below the crate root.
+[openh264-sys2.clarify]
+license = "BSD-2-Clause"
+[[openh264-sys2.clarify.files]]
+path = "upstream/LICENSE"
+checksum = "1ca9a98d1b5c6d6f0411c6cb8732299670fafbc33b92fedeca8a86b1e4d3d72e"
+
+# These crates combine several licenses and notices in one file. Keep it intact.
+[aws-lc-rs.clarify]
+license = "ISC AND (Apache-2.0 OR ISC)"
+[[aws-lc-rs.clarify.files]]
+path = "LICENSE"
+checksum = "b50b376e7d24a0598488b730c3034ffcd0b58dd36c0913a24b9903a3cfd04bf7"
+
+[aws-lc-sys.clarify]
+license = "ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0)"
+[[aws-lc-sys.clarify.files]]
+path = "LICENSE"
+checksum = "728536b4160e051f86d7c9c388f704866b3d512cd7df97ac3516c65279523c4e"
+
+[rcgen.clarify]
+license = "MIT OR Apache-2.0"
+[[rcgen.clarify.files]]
+path = "LICENSE"
+checksum = "debe6fed7ac143217c7f533759c54b14f18cd01d5fe195c51d83c2ae2d136cb4"
+
+# These Apache texts omit the appendix and need explicit identification.
+[ryu.clarify]
+license = "Apache-2.0 OR BSL-1.0"
+[[ryu.clarify.files]]
+path = "LICENSE-APACHE"
+license = "Apache-2.0"
+checksum = "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+
+[sync_wrapper.clarify]
+license = "Apache-2.0"
+[[sync_wrapper.clarify.files]]
+path = "LICENSE"
+checksum = "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+
+# Choose the Zlib option because it is the license text shipped by wide.
+[wide.clarify]
+license = "Zlib"
+[[wide.clarify.files]]
+path = "LICENSE-ZLIB.md"
+checksum = "c43b9a9b1387ed53d2c49263838261129a010e280e3a174a792242c3e2c98db9"
+
+# These crates omit license files from their published packages. Read the
+# repository files at each package's published commit, with checksums.
+[gbm-sys.clarify]
+license = "MIT"
+[[gbm-sys.clarify.git]]
+path = "LICENSE"
+checksum = "56ab09c42eb251646c1c00ba32f5db0e51e297cd379eccc5a1cb7808f2de4ce7"
+
+[ironrdp-echo.clarify]
+license = "MIT OR Apache-2.0"
+[[ironrdp-echo.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+
+[rustcrypto-ff_derive.clarify]
+license = "MIT OR Apache-2.0"
+[[rustcrypto-ff_derive.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "8d0c1d1d4b2bebf5b9211f0e883d5a482b7808f3ed31320da14ddee95811f4ef"
+
+[winscard.clarify]
+license = "MIT OR Apache-2.0"
+[[winscard.clarify.git]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"

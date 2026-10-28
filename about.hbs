@@ -1,0 +1,15 @@
+Third-party licenses
+
+{{#each licenses}}
+================================================================================
+{{{name}}} ({{id}})
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}{{#each crate.authors}}
+  Author: {{{this}}}{{/each}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}
