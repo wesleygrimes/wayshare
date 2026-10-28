@@ -95,7 +95,8 @@ you send your password. Follow the [Windows App and mstsc](docs/connect/windows-
 or [FreeRDP](docs/connect/freerdp.md) quickstart.
 
 For connection or startup problems, run `wayshare doctor` and see
-[Troubleshooting](docs/troubleshooting.md). Doctor does not check RDP.
+[Troubleshooting](docs/troubleshooting.md). For RDP, doctor checks the ufw rule
+but does not connect to the listener.
 
 ## Commands
 

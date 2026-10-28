@@ -93,7 +93,7 @@ and directory permissions that let wayshare read or create it. Then run
 
 If the listener is ready, allow TCP 3389 from your LAN or VPN in your firewall.
 Setup offers the ufw rule. On an existing install, rerun `wayshare setup` or add
-that rule yourself. Doctor does not check this port or rule. Builds with
+that rule yourself. Doctor checks the ufw rule but not the listener. Builds with
 `--no-default-features` omit RDP.
 
 ### The client shows a certificate warning
