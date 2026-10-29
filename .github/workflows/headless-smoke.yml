@@ -1,0 +1,167 @@
+name: Headless smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      ironrdp-ref:
+        description: Pinned IronRDP commit to build ironrdp-agent from
+        default: 10199db3b0aeca629adc02234ffdbb570bb77d43
+      desktop-size:
+        description: Headless output and client size, as WxH
+        default: 1920x1080
+      build-agent:
+        description: Also build and try ironrdp-agent on Linux
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: headless-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  headless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MISE_DISABLE_TOOLS: cargo:bindgen-cli
+      IRONRDP_REF: ${{ inputs.ironrdp-ref || '10199db3b0aeca629adc02234ffdbb570bb77d43' }}
+      DESKTOP_SESSION_HOST: 127.0.0.1
+      DESKTOP_SESSION_PORT: '13389'
+      DESKTOP_SESSION_USER: smoke
+      DESKTOP_SESSION_SIZE: ${{ inputs.desktop-size || '1920x1080' }}
+      DESKTOP_SESSION_CONTAINER: wayshare-headless
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare desktop session
+        run: |
+          umask 077
+          private="$RUNNER_TEMP/desktop-session-private"
+          artifacts="$RUNNER_TEMP/desktop-session"
+          mkdir -p "$private" "$artifacts" "$RUNNER_TEMP/ironrdp-agent"
+          chmod 755 "$artifacts"
+          [[ $DESKTOP_SESSION_SIZE =~ ^[0-9]+x[0-9]+$ ]]
+          password=$(python3 -c 'import secrets; print(secrets.token_hex(24))')
+          printf '::add-mask::%s\n' "$password"
+          printf '%s\n' "$password" > "$private/password"
+          {
+            echo "DESKTOP_SESSION_PASSWORD_FILE=$private/password"
+            echo "DESKTOP_SESSION_ARTIFACTS=$artifacts"
+            echo "DESKTOP_SESSION_AGENT=$RUNNER_TEMP/ironrdp-agent/ironrdp-agent"
+            echo "DESKTOP_SESSION_ENDPOINT=$private/agent.sock"
+          } >> "$GITHUB_ENV"
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libegl-dev libgbm-dev
+      - uses: jdx/mise-action@fc42bcc7ddbf51124c30f95a877a0c5168a3bfde # v5.2.1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+      - name: Build wayshare
+        run: mise run build 2>&1 | tee "$DESKTOP_SESSION_ARTIFACTS/build.log"
+      - name: Restore ironrdp-agent
+        id: agent-cache
+        if: github.event_name != 'workflow_dispatch' || inputs.build-agent
+        continue-on-error: true
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.DESKTOP_SESSION_AGENT }}
+          key: ironrdp-agent-${{ runner.os }}-${{ runner.arch }}-${{ env.IRONRDP_REF }}
+      - name: Build ironrdp-agent on Linux (optional)
+        id: agent-build
+        if: (github.event_name != 'workflow_dispatch' || inputs.build-agent) && steps.agent-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          CARGO_BUILD_JOBS: '2'
+          CARGO_INCREMENTAL: '0'
+        run: |
+          [[ $IRONRDP_REF =~ ^[0-9a-f]{40}$ ]]
+          git init --quiet "$RUNNER_TEMP/ironrdp"
+          git -C "$RUNNER_TEMP/ironrdp" fetch --quiet --depth 1 https://github.com/Devolutions/IronRDP.git "$IRONRDP_REF"
+          git -C "$RUNNER_TEMP/ironrdp" checkout --quiet --detach FETCH_HEAD
+          cargo build --locked --manifest-path "$RUNNER_TEMP/ironrdp/Cargo.toml" -p ironrdp-agent --release \
+            2>&1 | tee "$DESKTOP_SESSION_ARTIFACTS/ironrdp-agent-build.log"
+          install -m 755 "$RUNNER_TEMP/ironrdp/target/release/ironrdp-agent" "$DESKTOP_SESSION_AGENT"
+      - name: Save ironrdp-agent
+        if: steps.agent-build.outcome == 'success'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.DESKTOP_SESSION_AGENT }}
+          key: ironrdp-agent-${{ runner.os }}-${{ runner.arch }}-${{ env.IRONRDP_REF }}
+      - name: Start Hyprland headless
+        run: |
+          {
+            uname -a
+            grep -E 'CONFIG_DRM_(VKMS|VGEM)|CONFIG_UDMABUF' "/boot/config-$(uname -r)" || true
+            sudo modprobe vkms
+            sudo modprobe vgem
+          } 2>&1 | tee "$DESKTOP_SESSION_ARTIFACTS/runner-drm.log"
+          devices=()
+          while IFS= read -r node; do devices+=(--device "$node"); done \
+            < <(bash "$GITHUB_WORKSPACE/tools/headless-smoke.sh" --list-software-devices)
+          [[ -c /dev/udmabuf ]]
+          devices+=(--device /dev/udmabuf)
+          docker run -d --name "$DESKTOP_SESSION_CONTAINER" "${devices[@]}" \
+            --publish "127.0.0.1:$DESKTOP_SESSION_PORT:$DESKTOP_SESSION_PORT" \
+            --env DESKTOP_SESSION_PORT --env DESKTOP_SESSION_USER --env DESKTOP_SESSION_SIZE \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/work,readonly" \
+            --mount "type=bind,src=$DESKTOP_SESSION_ARTIFACTS,dst=/artifacts" \
+            --mount "type=bind,src=$DESKTOP_SESSION_PASSWORD_FILE,dst=/run/desktop-session-password,readonly" \
+            archlinux:latest sleep infinity
+          docker exec "$DESKTOP_SESSION_CONTAINER" bash /work/tools/headless-smoke.sh prepare
+          docker exec "$DESKTOP_SESSION_CONTAINER" bash /work/tools/headless-smoke.sh start-hyprland
+      - name: Start wayshare RDP server
+        run: docker exec "$DESKTOP_SESSION_CONTAINER" bash /work/tools/headless-smoke.sh start-server
+      - name: Wait for RDP port
+        id: rdp-ready
+        run: |
+          python3 - <<'PY'
+          import os, socket, time
+          address = (os.environ['DESKTOP_SESSION_HOST'], int(os.environ['DESKTOP_SESSION_PORT']))
+          for _ in range(30):
+              try:
+                  with socket.create_connection(address, timeout=1):
+                      break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise SystemExit(f'RDP port did not open: {address}')
+          PY
+      - name: Connect client and take screenshot
+        run: docker exec "$DESKTOP_SESSION_CONTAINER" bash /work/tools/headless-smoke.sh freerdp
+      - name: Connect ironrdp-agent and take screenshot (optional)
+        if: ${{ !cancelled() && steps.rdp-ready.outcome == 'success' && (github.event_name != 'workflow_dispatch' || inputs.build-agent) }}
+        continue-on-error: true
+        timeout-minutes: 10
+        run: bash "$GITHUB_WORKSPACE/tools/ironrdp-agent-smoke.sh"
+      # Later steps can use DESKTOP_SESSION_AGENT and DESKTOP_SESSION_ENDPOINT directly.
+      - name: Clean up desktop session
+        if: always()
+        run: |
+          if [[ -x ${DESKTOP_SESSION_AGENT:-} ]]; then
+            timeout 10s "$DESKTOP_SESSION_AGENT" --endpoint "$DESKTOP_SESSION_ENDPOINT" daemon stop || true
+          fi
+          private="$RUNNER_TEMP/desktop-session-private"
+          if [[ -f $private/state/ironrdp-agent/daemon.log ]]; then
+            cp "$private/state/ironrdp-agent/daemon.log" "$DESKTOP_SESSION_ARTIFACTS/ironrdp-agent-daemon.log"
+          fi
+          docker exec "$DESKTOP_SESSION_CONTAINER" bash /work/tools/headless-smoke.sh collect || true
+          docker rm -f "$DESKTOP_SESSION_CONTAINER" || true
+          rm -rf "$private"
+      - name: Upload diagnostics and received frames
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: headless-smoke-${{ github.run_attempt }}
+          path: ${{ env.DESKTOP_SESSION_ARTIFACTS }}
+          if-no-files-found: warn
+          retention-days: 14
