@@ -389,6 +389,7 @@ impl Session {
             }
             ClientMessage::MediaStreamConfig(raw) => self.media_stream_config(&raw).await?,
             ClientMessage::SetDisplayConfiguration(raw) => {
+                let mut resized = None;
                 match apple::parse_display_configuration(&raw) {
                     Ok(req) => {
                         let pref = req.displays.first().and_then(|d| d.preferred());
@@ -414,13 +415,7 @@ impl Session {
                                         dynamic = self.dynamic_resolution,
                                         "output resized for viewer"
                                     );
-                                    // The viewer waits for display info after every msg 29,
-                                    // even when the size is unchanged.
-                                    if applied.pixels == self.fb_size {
-                                        self.send_display_info(applied).await?;
-                                    } else {
-                                        self.display_applied = Some(applied);
-                                    }
+                                    resized = Some(applied);
                                 }
                                 Ok(None) => {}
                                 Err(e) => warn!("display resize failed: {e:#}"),
@@ -431,6 +426,18 @@ impl Session {
                         len = raw.len(),
                         "SetDisplayConfiguration not decoded: {e:#}"
                     ),
+                }
+                // The viewer waits for display info after every msg 29, even when the size is
+                // unchanged or the resize was refused or failed; without it the viewer hangs.
+                match resized {
+                    Some(applied) if applied.pixels != self.fb_size => {
+                        self.display_applied = Some(applied);
+                    }
+                    Some(applied) => self.send_display_info(applied).await?,
+                    None => {
+                        self.send_display_info(self.display_at(self.fb_size))
+                            .await?
+                    }
                 }
                 if let Some(hp) = &self.cfg.hp {
                     hp.set_display_configuration(&raw)?;
@@ -565,15 +572,20 @@ impl Session {
         let pixels = resize.pixels;
         info!(from = ?self.fb_size, to = ?pixels, "renegotiating HP for the new output size");
         // Configure will read the compositor's current scale with the negotiated size.
+        self.stop_hp_for_display_change();
+        self.display_applied = Some(self.display_at(pixels));
+        self.reoffer_hp().await
+    }
+
+    /// Describes `pixels` at the current display scale.
+    fn display_at(&self, pixels: (u16, u16)) -> AppliedDisplay {
         let scale = self.display_scale;
         let points = |v: u16| (v as f64 / scale).round() as u16;
-        self.stop_hp_for_display_change();
-        self.display_applied = Some(AppliedDisplay {
+        AppliedDisplay {
             pixels,
             points: (points(pixels.0), points(pixels.1)),
             scale,
-        });
-        self.reoffer_hp().await
+        }
     }
 
     async fn sync_size(&mut self) -> Result<()> {
@@ -1543,6 +1555,48 @@ mod tests {
             "restore 7",
         ] {
             assert!(log.has(e), "missing {e:?} in {:?}", log.0.lock().unwrap());
+        }
+    }
+
+    /// Issue #72: a refused or failed resize still answers msg 29 with the current geometry.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn msg29_without_resize_still_sends_display_info() {
+        struct BrokenDisplay;
+        impl DisplayControl for BrokenDisplay {
+            fn configure(
+                &self,
+                _: SessionId,
+                _: &apple::DisplayRequest,
+            ) -> Result<Option<AppliedDisplay>> {
+                anyhow::bail!("simulated resize failure")
+            }
+            fn restore(&self, _: SessionId) -> Result<()> {
+                Ok(())
+            }
+        }
+        let refused: Arc<dyn DisplayControl> = Arc::new(FakeDisplay(Arc::default()));
+        for display in [refused, Arc::new(BrokenDisplay)] {
+            let mut cfg = test_config();
+            cfg.display = Some(display);
+            let (mut client, server) = start(cfg).await.unwrap();
+            let mut msgs = vec![2, 0, 0, 1];
+            msgs.extend_from_slice(&pseudo::ENC_DISPLAY_INFO.to_be_bytes());
+            msgs.extend_from_slice(include_bytes!("../../tests/fixtures/msg29-0.bin"));
+            client.write_all(&msgs).await.unwrap();
+            let payload = apple::encode_display_info(
+                64,
+                48,
+                0,
+                &[apple::DisplayInfoEntry {
+                    display_id: 1,
+                    pixel_width: 64,
+                    pixel_height: 48,
+                }],
+            );
+            let info = pseudo::single_rect(0, 0, 64, 48, pseudo::ENC_DISPLAY_INFO, &payload);
+            read_until(&mut client, "display info", |got| has_seq(got, &info)).await;
+            drop(client);
+            server.await.unwrap().unwrap();
         }
     }
 
