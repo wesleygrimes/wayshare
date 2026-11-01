@@ -4034,7 +4034,7 @@ DEALINGS IN THE SOFTWARE.
 MIT License (MIT)
 
 Used by:
-- libz-sys 1.1.30
+- libz-sys 1.1.31
   Author: Alex Crichton <alex@alexcrichton.com>
   Author: Josh Triplett <josh@joshtriplett.org>
   Author: Sebastian Thiel <sebastian.thiel@icloud.com>
