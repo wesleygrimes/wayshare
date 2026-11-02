@@ -79,6 +79,10 @@ pub trait DisplayControl: Send + Sync {
     ) -> Result<Option<AppliedDisplay>> {
         Ok(None)
     }
+    /// The output's current scale, used to answer a msg 29 that changed nothing.
+    fn current_scale(&self, _session: SessionId) -> Result<Option<f64>> {
+        Ok(None)
+    }
     /// Releases this session's display changes, even if session startup failed.
     fn restore(&self, session: SessionId) -> Result<()>;
 }

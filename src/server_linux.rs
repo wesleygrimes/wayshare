@@ -579,6 +579,16 @@ impl crate::rfb::DisplayControl for HyprDisplay {
         self.apply_mode(session, &mode)
     }
 
+    fn current_scale(&self, _session: SessionId) -> Result<Option<f64>> {
+        use crate::display::DisplayManager;
+        let scale = crate::display::hyprland::Hyprland::from_env()?
+            .outputs()?
+            .into_iter()
+            .find(|o| o.name == self.output)
+            .map(|o| o.scale);
+        Ok(scale)
+    }
+
     fn restore(&self, session: SessionId) -> Result<()> {
         let resized = self.restore_mode(session);
         // Always release exclusive ownership, even if restoring the shared mode failed.

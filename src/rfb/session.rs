@@ -429,15 +429,21 @@ impl Session {
                 }
                 // The viewer waits for display info after every msg 29, even when the size is
                 // unchanged or the resize was refused or failed; without it the viewer hangs.
-                match resized {
-                    Some(applied) if applied.pixels != self.fb_size => {
-                        self.display_applied = Some(applied);
-                    }
-                    Some(applied) => self.send_display_info(applied).await?,
+                // The first msg 29 arrives before SetEncodings, so the reply can't go out yet;
+                // `sync_size` sends it on the next tick once the viewer accepts display info.
+                let reply = match resized {
+                    Some(applied) => applied,
                     None => {
-                        self.send_display_info(self.display_at(self.fb_size))
-                            .await?
+                        if let Some(scale) = self.current_scale() {
+                            self.display_scale = scale;
+                        }
+                        self.display_at(self.fb_size)
                     }
+                };
+                if reply.pixels == self.fb_size && self.supports_display_info() {
+                    self.send_geometry(reply).await?;
+                } else {
+                    self.display_applied = Some(reply);
                 }
                 if let Some(hp) = &self.cfg.hp {
                     hp.set_display_configuration(&raw)?;
@@ -605,7 +611,7 @@ impl Session {
                 && applied.pixels == size
             {
                 self.display_applied = None;
-                self.send_display_info(applied).await?;
+                self.send_geometry(applied).await?;
             }
             return Ok(());
         }
@@ -634,6 +640,35 @@ impl Session {
             self.auto = Some((0, 0, size.0, size.1));
         }
         Ok(())
+    }
+
+    fn supports_display_info(&self) -> bool {
+        self.supports(pseudo::ENC_DISPLAY_INFO2) || self.supports(pseudo::ENC_DISPLAY_INFO)
+    }
+
+    /// The output's scale now, before any resize or HP answer has reported it.
+    fn current_scale(&self) -> Option<f64> {
+        let display = self.cfg.display.as_ref()?;
+        match display.current_scale(self.id) {
+            Ok(scale) => scale,
+            Err(e) => {
+                warn!("reading the output scale failed: {e:#}");
+                None
+            }
+        }
+    }
+
+    /// Sends display info for an unchanged size, preceded by a same-size DesktopSize.
+    /// Screen Sharing lays out its HP pointer view on DesktopSize; display info alone leaves
+    /// that view at the old height and HP clicks land low by the difference (#72).
+    async fn send_geometry(&mut self, d: AppliedDisplay) -> Result<()> {
+        if self.supports_display_info() && self.supports(ENC_DESKTOP_SIZE) {
+            self.out
+                .send(&pseudo::desktop_size(d.pixels.0, d.pixels.1))
+                .await?;
+            info!(size = ?d.pixels, "sent DesktopSize with display info");
+        }
+        self.send_display_info(d).await
     }
 
     async fn send_display_info(&mut self, d: AppliedDisplay) -> Result<()> {
@@ -1556,6 +1591,45 @@ mod tests {
         ] {
             assert!(log.has(e), "missing {e:?} in {:?}", log.0.lock().unwrap());
         }
+    }
+
+    /// Issue #72: Screen Sharing sends msg 29 before SetEncodings. The reply waits for
+    /// SetEncodings and goes out as a same-size DesktopSize followed by display info.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn msg29_before_set_encodings_sends_desktop_size_then_display_info() {
+        let mut cfg = test_config();
+        cfg.display = Some(Arc::new(FakeDisplay(Arc::default())));
+        let (mut client, server) = start(cfg).await.unwrap();
+        let mut msgs = include_bytes!("../../tests/fixtures/msg29-0.bin").to_vec();
+        msgs.extend_from_slice(&[2, 0, 0, 2]);
+        msgs.extend_from_slice(&ENC_DESKTOP_SIZE.to_be_bytes());
+        msgs.extend_from_slice(&pseudo::ENC_DISPLAY_INFO.to_be_bytes());
+        client.write_all(&msgs).await.unwrap();
+        let payload = apple::encode_display_info(
+            64,
+            48,
+            0,
+            &[apple::DisplayInfoEntry {
+                display_id: 1,
+                pixel_width: 64,
+                pixel_height: 48,
+            }],
+        );
+        let mut want = pseudo::desktop_size(64, 48);
+        want.extend(pseudo::single_rect(
+            0,
+            0,
+            64,
+            48,
+            pseudo::ENC_DISPLAY_INFO,
+            &payload,
+        ));
+        read_until(&mut client, "DesktopSize then display info", |got| {
+            has_seq(got, &want)
+        })
+        .await;
+        drop(client);
+        server.await.unwrap().unwrap();
     }
 
     /// Issue #72: a refused or failed resize still answers msg 29 with the current geometry.
