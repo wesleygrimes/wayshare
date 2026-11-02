@@ -58,6 +58,24 @@ pub struct AppliedDisplay {
     pub scale: f64,
 }
 
+impl AppliedDisplay {
+    /// Rounds a fractional scale up to the next whole one, as macOS hosts only use whole
+    /// backing scales. Screen Sharing converts HP pointer points to pixels with its own
+    /// whole scale, so 1.6 (1600x1040 points for 2560x1664) stretches clicks by 2/1.6 (#72).
+    pub fn whole_scale(self) -> Self {
+        let scale = self.scale.ceil().max(1.0);
+        if scale == self.scale {
+            return self;
+        }
+        let points = |v: u16| (v as f64 / scale).round() as u16;
+        Self {
+            pixels: self.pixels,
+            points: (points(self.pixels.0), points(self.pixels.1)),
+            scale,
+        }
+    }
+}
+
 /// Manages display changes owned by authenticated sessions.
 pub trait DisplayControl: Send + Sync {
     /// Called after authentication with session teardown already armed.
@@ -187,6 +205,23 @@ pub async fn serve_on(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn whole_scale_rounds_fractional_scales_up() {
+        let d = |pixels, points, scale| AppliedDisplay {
+            pixels,
+            points,
+            scale,
+        };
+        assert_eq!(
+            d((2560, 1664), (1600, 1040), 1.6).whole_scale(),
+            d((2560, 1664), (1280, 832), 2.0)
+        );
+        let whole = d((3840, 2160), (1920, 1080), 2.0);
+        assert_eq!(whole.whole_scale(), whole);
+        let one = d((1920, 1080), (1920, 1080), 1.0);
+        assert_eq!(one.whole_scale(), one);
+    }
+
     use super::*;
 
     struct NoHp;

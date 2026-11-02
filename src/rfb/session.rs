@@ -673,6 +673,7 @@ impl Session {
 
     async fn send_display_info(&mut self, d: AppliedDisplay) -> Result<()> {
         const DISPLAY_ID: u32 = 1;
+        let d = d.whole_scale();
         let (w, h) = d.pixels;
         let msg = if self.supports(pseudo::ENC_DISPLAY_INFO2) {
             let entry = DisplayInfo2Entry {
