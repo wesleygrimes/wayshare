@@ -2,6 +2,8 @@
 idiomatic_version_file_enable_tools = ["rust"]
 
 [tools]
+rust = { version = "1.98", components = "rustfmt,clippy", mr_boxington = true }
+mr-boxington = "1.29.2"
 "cargo:bindgen-cli" = "0.73.2"
 shellcheck = "0.11.0"
 actionlint = "1.7.12"
@@ -29,25 +31,25 @@ run = "cargo fmt --check"
 [tasks.lint]
 description = "Run clippy, ShellCheck and actionlint"
 run = [
-  "cargo clippy --locked --all-targets -- -D warnings",
+  "mbx clippy --locked --all-targets -- -D warnings",
   "shellcheck install.sh tools/*.sh",
   "actionlint",
 ]
 
 [tasks.test]
 description = "Run the test suite"
-run = "cargo test --locked"
+run = "mbx test --locked"
 
 [tasks."check:no-rdp"]
 description = "Check the build without RDP"
 run = [
-  "cargo clippy --locked --all-targets --no-default-features -- -D warnings",
-  "cargo test --locked --no-default-features",
+  "mbx clippy --locked --all-targets --no-default-features -- -D warnings",
+  "mbx test --locked --no-default-features",
 ]
 
 [tasks."bench:media"]
 description = "Measure HEVC packetization and SRTP encryption without a GPU"
-run = "cargo bench --locked --bench media"
+run = "mbx bench --locked --bench media"
 
 [tasks.check]
 description = "Check formatting, lint and tests without rewriting files"
@@ -67,7 +69,7 @@ fi
 [tasks.build]
 description = "Build the dev profile, or the optimized binary with --release"
 usage = 'flag "--release" help="Build the release profile"'
-run = 'cargo build --locked ${usage_release:+--release}'
+run = 'mbx build --locked ${usage_release:+--release}'
 
 [tasks.audit]
 description = "Check dependency advisories, licenses and sources (needs network)"

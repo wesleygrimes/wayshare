@@ -29,7 +29,7 @@ jobs:
       - name: Install system packages
         run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libegl-dev libgbm-dev
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
       - run: mise run check
       - run: mise run check:no-rdp
       - run: mise run audit
@@ -43,9 +43,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: jdx/mise-action@6be3c7ed4c21d4f76b208d351d95aac273ebb76d # v5.2.4
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
       - run: mise run test
-      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: mbx clippy --locked --all-targets -- -D warnings
       - run: mise run check:no-rdp
 
   msrv:
@@ -62,9 +62,11 @@ jobs:
           msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
           rustup toolchain install "$msrv" --profile minimal
           echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: cargo check --locked
-      - run: cargo check --locked --no-default-features
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
+        with:
+          version: 1.29.2
+      - run: mbx check --locked
+      - run: mbx check --locked --no-default-features
 
   commits:
     name: commits
