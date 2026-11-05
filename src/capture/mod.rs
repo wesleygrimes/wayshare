@@ -593,15 +593,16 @@ impl State {
             .allocate(c.width, c.height, c.fourcc, &c.modifiers)
         {
             Ok(alloc) => alloc,
-            Err(e) if use_shm(c.shm_offered, false, self.alloc.gbm_map_failed) => {
+            Err(e) if use_shm(c.shm_offered, false, self.alloc.cpu_dmabuf_unusable()) => {
                 tracing::warn!("{e:#}; capturing through wl_shm instead");
                 self.set_constraints(Constraints::shm(c.width, c.height));
                 return self.take_buffer(qh);
             }
-            Err(e) if self.alloc.gbm_map_failed => {
+            Err(e) if self.alloc.cpu_dmabuf_unusable() => {
                 return Err(e.context(
-                    "GBM can't map capture buffers, and the compositor offers no XRGB8888 \
-                     wl_shm fallback through ext-image-copy-capture",
+                    "CPU capture can't use a dmabuf (GBM can't map one, or there is no \
+                     /dev/udmabuf), and the compositor offers no XRGB8888 wl_shm fallback \
+                     through ext-image-copy-capture",
                 ));
             }
             Err(e) => return Err(e),
@@ -797,7 +798,7 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, ()> for State {
                 if use_shm(
                     shm_offered,
                     shm_offered && state.alloc.is_virtio_gpu(),
-                    state.alloc.gbm_map_failed,
+                    state.alloc.cpu_dmabuf_unusable(),
                 ) {
                     let (width, height) = state.pending_size;
                     tracing::debug!(width, height, "ext capture constraints: wl_shm");
