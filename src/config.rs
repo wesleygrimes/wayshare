@@ -67,8 +67,9 @@ impl Default for RdpSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct HpSettings {
     pub enabled: bool,
-    /// UDP port for video; audio uses `port + 2`. No inbound firewall rule is needed: the
-    /// server sends first and the viewer's RTCP returns through connection tracking.
+    /// UDP port for video; audio uses `port + 2` on both peers. Media goes to the viewer
+    /// and RTCP feedback returns on the same sockets. Policy must allow both directions,
+    /// either explicitly or through stateful return traffic.
     pub port: u16,
     pub bitrate: Option<u64>,
     pub encoder: Encoder,

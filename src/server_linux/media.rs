@@ -21,6 +21,7 @@ type Encoder = Box<dyn VideoEncoder<Frame = crate::capture::Frame> + Send>;
 
 const FIRST_RTCP_TIMEOUT: Duration = Duration::from_secs(15);
 const RTCP_SILENCE_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_RTCP_BATCH: usize = 32;
 /// The viewer repeats FIR (one per tile, every ~250 ms) until a refresh decodes; one refresh
 /// per window answers them all.
 const FIR_DEDUPE: Duration = Duration::from_millis(500);
@@ -47,7 +48,6 @@ pub(super) struct MediaParams {
 #[derive(Default)]
 struct Stats {
     frames: u64,
-    rtcp: u64,
     firs: u64,
     acks: u64,
     other_rtcp: u64,
@@ -61,6 +61,107 @@ struct Stats {
     present_to_ready_ms: Vec<f64>,
     /// Captured frames replaced by a newer one while the encoder was busy.
     dropped: u64,
+}
+
+struct RtcpFeedback {
+    rx: SrtpContext,
+    last_received: Option<Instant>,
+    received: u64,
+    valid: u64,
+    non_rtcp: u64,
+    unprotect_failed: u64,
+    malformed: u64,
+    recv_errors: u64,
+    last_recv_error: Option<std::io::ErrorKind>,
+}
+
+impl RtcpFeedback {
+    fn new(key: &[u8; KEY_LEN]) -> Self {
+        Self {
+            rx: SrtpContext::new(key),
+            last_received: None,
+            received: 0,
+            valid: 0,
+            non_rtcp: 0,
+            unprotect_failed: 0,
+            malformed: 0,
+            recv_errors: 0,
+            last_recv_error: None,
+        }
+    }
+
+    fn accept(&mut self, mut pkt: Vec<u8>, now: Instant) -> Vec<RtcpEvent> {
+        self.received += 1;
+        if !srtp::is_rtcp(&pkt) {
+            self.non_rtcp += 1;
+            return Vec::new();
+        }
+        if let Err(e) = self.rx.unprotect_rtcp(&mut pkt) {
+            self.unprotect_failed += 1;
+            if self.unprotect_failed == 1 {
+                warn!(
+                    "SRTCP unprotect failed: {e:#}; first occurrence, cumulative count in HP stats"
+                );
+            }
+            return Vec::new();
+        }
+        let events = match rtcp::parse(&pkt) {
+            Ok(events) => events,
+            Err(e) => {
+                self.malformed += 1;
+                if self.malformed == 1 {
+                    warn!(
+                        "RTCP parse failed: {e:#}; first occurrence, cumulative count in HP stats"
+                    );
+                }
+                return Vec::new();
+            }
+        };
+        if self.last_received.is_none() {
+            info!("first RTCP from viewer");
+        }
+        self.last_received = Some(now);
+        self.valid += 1;
+        events
+    }
+
+    fn drain(&mut self, sock: &UdpSocket) -> Vec<RtcpEvent> {
+        let mut events = Vec::new();
+        let mut buf = [0u8; 2048];
+        // A continuously readable socket must leave time for capture, timeout and stop checks.
+        for _ in 0..MAX_RTCP_BATCH {
+            match sock.recv(&mut buf) {
+                Ok(n) => events.extend(self.accept(buf[..n].to_vec(), Instant::now())),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    self.recv_errors += 1;
+                    self.last_recv_error = Some(e.kind());
+                    break;
+                }
+            }
+        }
+        events
+    }
+
+    fn check_timeout(&self, start: Instant, now: Instant) -> Result<()> {
+        let (since, timeout, phase) = match self.last_received {
+            Some(t) => (t, RTCP_SILENCE_TIMEOUT, "after feedback"),
+            None => (start, FIRST_RTCP_TIMEOUT, "initial feedback"),
+        };
+        ensure!(
+            now.duration_since(since) <= timeout,
+            "no valid video RTCP for {timeout:?} ({phase}); HP stream totals: received={} valid={} non_rtcp={} unprotect_failed={} malformed={} recv_errors={} last_recv_error={:?}",
+            self.received,
+            self.valid,
+            self.non_rtcp,
+            self.unprotect_failed,
+            self.malformed,
+            self.recv_errors,
+            self.last_recv_error,
+        );
+        Ok(())
+    }
 }
 
 /// Counters kept by the send thread.
@@ -192,12 +293,15 @@ pub(super) fn run_media(p: MediaParams, stop: &AtomicBool) -> Result<MediaEnd> {
         .with_context(|| format!("binding UDP {}", p.port))?;
     sock.connect(SocketAddr::new(p.peer, p.port))?;
     sock.set_nonblocking(true)?;
+    let local = sock.local_addr()?;
+    let peer = sock.peer_addr()?;
     let sref = socket2::SockRef::from(&sock);
     if let Err(e) = sref.set_send_buffer_size(SEND_BUFFER) {
         warn!("SO_SNDBUF {SEND_BUFFER}: {e}");
     }
     info!(
-        peer = %p.peer,
+        local_bind = %local,
+        peer = %peer,
         port = p.port,
         sndbuf = sref.send_buffer_size().ok(),
         "HP media socket ready"
@@ -255,7 +359,7 @@ pub(super) fn run_media(p: MediaParams, stop: &AtomicBool) -> Result<MediaEnd> {
         p.tiles,
         crate::encode::TILE_COUNT
     );
-    let mut rx = SrtpContext::new(&p.recv_key);
+    let mut rx = RtcpFeedback::new(&p.recv_key);
     info!(width = w, height = h, layout = ?enc.layout(), "HP encoder ready");
 
     let start = Instant::now();
@@ -340,7 +444,7 @@ fn media_loop(
     cap: &mut Capturer,
     enc: &mut Encoder,
     rc: &mut RateController,
-    rx: &mut SrtpContext,
+    rx: &mut RtcpFeedback,
     first: crate::capture::Frame,
     start: Instant,
     send_stats: &Mutex<SendStats>,
@@ -348,7 +452,6 @@ fn media_loop(
     let mut stats = Stats::default();
     let mut last_log = Instant::now();
     let mut last_forced_idr: Option<Instant> = None;
-    let mut last_rtcp: Option<Instant> = None;
     // Latest-frame policy: while the encoder is busy only the newest capture is kept, so a
     // frame is never encoded after a newer one exists. Nothing is lost by dropping frames:
     // change detection compares against the last submitted frame.
@@ -375,7 +478,7 @@ fn media_loop(
                     first_frame_mismatch: false,
                 });
             }
-            if last_rtcp.is_none()
+            if rx.last_received.is_none()
                 && last_forced_idr.is_none_or(|t| t.elapsed() >= Duration::from_secs(1))
             {
                 enc.request_keyframe(None);
@@ -392,16 +495,8 @@ fn media_loop(
             anyhow::bail!("encode failed: {e}");
         }
 
-        drain_rtcp(sock, rx, enc, rc, start, &mut stats, &mut last_rtcp);
-        match last_rtcp {
-            None if start.elapsed() > FIRST_RTCP_TIMEOUT => {
-                anyhow::bail!("no RTCP from the viewer within {FIRST_RTCP_TIMEOUT:?}")
-            }
-            Some(t) if t.elapsed() > RTCP_SILENCE_TIMEOUT => {
-                anyhow::bail!("viewer RTCP silent for {RTCP_SILENCE_TIMEOUT:?}")
-            }
-            _ => {}
-        }
+        drain_rtcp(sock, rx, enc, rc, start, &mut stats);
+        rx.check_timeout(start, Instant::now())?;
 
         if last_log.elapsed() >= Duration::from_secs(5) {
             let secs = last_log.elapsed().as_secs_f64();
@@ -410,7 +505,13 @@ fn media_loop(
                 fps = format_args!("{:.1}", st.frames_window as f64 / secs),
                 mbps = format_args!("{:.1}", st.bytes_window as f64 * 8.0 / secs / 1e6),
                 frames = stats.frames,
-                rtcp = stats.rtcp,
+                rtcp = rx.valid,
+                udp_received = rx.received,
+                non_rtcp = rx.non_rtcp,
+                srtcp_unprotect_failed = rx.unprotect_failed,
+                rtcp_malformed = rx.malformed,
+                recv_errors = rx.recv_errors,
+                last_recv_error = ?rx.last_recv_error,
                 don_acks = stats.acks,
                 firs = stats.firs,
                 target_mbps = format_args!("{:.1}", rc.target_bps() as f64 / 1e6),
@@ -469,62 +570,39 @@ fn repeat_frame(f: &crate::capture::Frame) -> crate::capture::Frame {
 
 fn drain_rtcp(
     sock: &UdpSocket,
-    rx: &mut SrtpContext,
+    rx: &mut RtcpFeedback,
     enc: &mut Encoder,
     rc: &mut RateController,
     start: Instant,
     stats: &mut Stats,
-    last_rtcp: &mut Option<Instant>,
 ) {
-    let mut buf = vec![0u8; 2048];
-    while let Ok(n) = sock.recv(&mut buf) {
-        let mut pkt = buf[..n].to_vec();
-        if !srtp::is_rtcp(&pkt) {
-            debug!(len = n, "ignoring non-RTCP packet on the video port");
-            continue;
+    for ev in rx.drain(sock) {
+        if let Some(bps) = rc.on_event(&ev, start.elapsed()) {
+            debug!(bps, "rate control: new target");
+            enc.set_bitrate(bps as u64);
         }
-        if let Err(e) = rx.unprotect_rtcp(&mut pkt) {
-            warn!(len = n, "SRTCP unprotect failed: {e:#}");
-            continue;
-        }
-        if last_rtcp.is_none() {
-            info!("first RTCP from viewer");
-        }
-        *last_rtcp = Some(Instant::now());
-        stats.rtcp += 1;
-        match rtcp::parse(&pkt) {
-            Ok(events) => {
-                for ev in events {
-                    if let Some(bps) = rc.on_event(&ev, start.elapsed()) {
-                        debug!(bps, "rate control: new target");
-                        enc.set_bitrate(bps as u64);
-                    }
-                    match ev {
-                        RtcpEvent::KeyframeRequest { .. } => {
-                            stats.firs += 1;
-                            if stats.last_refresh.is_none_or(|t| t.elapsed() >= FIR_DEDUPE) {
-                                info!("viewer requested a keyframe");
-                                enc.request_keyframe(None);
-                                stats.last_refresh = Some(Instant::now());
-                            }
-                        }
-                        RtcpEvent::DonAck { .. } => stats.acks += 1,
-                        RtcpEvent::RateControl { ref data, .. } => {
-                            if let Some(fb) = RateFeedback::parse(data) {
-                                stats.feedback = Some(fb);
-                            }
-                        }
-                        RtcpEvent::ReceiverReport { .. } | RtcpEvent::Sdes => {}
-                        other => {
-                            stats.other_rtcp += 1;
-                            if stats.other_rtcp <= 20 {
-                                info!(?other, "unhandled RTCP");
-                            }
-                        }
-                    }
+        match ev {
+            RtcpEvent::KeyframeRequest { .. } => {
+                stats.firs += 1;
+                if stats.last_refresh.is_none_or(|t| t.elapsed() >= FIR_DEDUPE) {
+                    info!("viewer requested a keyframe");
+                    enc.request_keyframe(None);
+                    stats.last_refresh = Some(Instant::now());
                 }
             }
-            Err(e) => warn!("RTCP parse failed: {e:#}"),
+            RtcpEvent::DonAck { .. } => stats.acks += 1,
+            RtcpEvent::RateControl { ref data, .. } => {
+                if let Some(fb) = RateFeedback::parse(data) {
+                    stats.feedback = Some(fb);
+                }
+            }
+            RtcpEvent::ReceiverReport { .. } | RtcpEvent::Sdes => {}
+            other => {
+                stats.other_rtcp += 1;
+                if stats.other_rtcp <= 20 {
+                    info!(?other, "unhandled RTCP");
+                }
+            }
         }
     }
 }
@@ -532,6 +610,147 @@ fn drain_rtcp(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn protected_report(tx: &mut SrtpContext, malformed: bool) -> Vec<u8> {
+        let mut pkt = vec![0x80, rtcp::PT_RR, 0, 1, 0, 0, 0, 7];
+        if malformed {
+            pkt[3] = 10;
+        }
+        tx.protect_rtcp(&mut pkt).unwrap();
+        pkt
+    }
+
+    #[test]
+    fn rtcp_feedback_deadlines_and_recovery() {
+        let key = [7; KEY_LEN];
+        let mut tx = SrtpContext::new(&key);
+        let mut rx = RtcpFeedback::new(&key);
+        let start = Instant::now();
+        let tick = Duration::from_millis(1);
+        assert!(rx.check_timeout(start, start + FIRST_RTCP_TIMEOUT).is_ok());
+        assert!(
+            rx.check_timeout(start, start + FIRST_RTCP_TIMEOUT + tick)
+                .is_err()
+        );
+
+        let first = start + Duration::from_secs(2);
+        assert_eq!(
+            rx.accept(protected_report(&mut tx, false), first),
+            [RtcpEvent::ReceiverReport {
+                ssrc: 7,
+                blocks: Vec::new()
+            }]
+        );
+        assert!(
+            rx.check_timeout(start, first + RTCP_SILENCE_TIMEOUT)
+                .is_ok()
+        );
+        assert!(
+            rx.check_timeout(start, first + RTCP_SILENCE_TIMEOUT + tick)
+                .is_err()
+        );
+
+        let resumed = first + RTCP_SILENCE_TIMEOUT - tick;
+        rx.accept(protected_report(&mut tx, false), resumed);
+        assert!(
+            rx.check_timeout(start, first + RTCP_SILENCE_TIMEOUT + tick)
+                .is_ok()
+        );
+        assert_eq!(rx.valid, 2);
+    }
+
+    #[test]
+    fn rtcp_feedback_rejected_packets_do_not_postpone_fallback() {
+        let key = [7; KEY_LEN];
+        let start = Instant::now();
+        for established in [false, true] {
+            let mut tx = SrtpContext::new(&key);
+            let mut rx = RtcpFeedback::new(&key);
+            let first = start + Duration::from_secs(1);
+            if established {
+                rx.accept(protected_report(&mut tx, false), first);
+            }
+            let late = start + FIRST_RTCP_TIMEOUT + Duration::from_secs(1);
+            assert!(rx.accept(vec![0; 24], late).is_empty());
+            let mut corrupt = protected_report(&mut tx, false);
+            *corrupt.last_mut().unwrap() ^= 1;
+            assert!(rx.accept(corrupt, late).is_empty());
+            assert!(rx.accept(protected_report(&mut tx, true), late).is_empty());
+            assert_eq!(rx.last_received, established.then_some(first));
+            assert_eq!((rx.non_rtcp, rx.unprotect_failed, rx.malformed), (1, 1, 1));
+            assert_eq!(rx.valid, u64::from(established));
+            assert_eq!(rx.received, 3 + u64::from(established));
+            assert!(rx.check_timeout(start, late).is_err());
+        }
+    }
+
+    #[test]
+    fn rtcp_feedback_unknown_packet_type_still_counts_as_liveness() {
+        let key = [7; KEY_LEN];
+        let mut tx = SrtpContext::new(&key);
+        let mut rx = RtcpFeedback::new(&key);
+        let start = Instant::now();
+        let now = start + FIRST_RTCP_TIMEOUT;
+        let mut pkt = vec![0x80, 210, 0, 1, 0, 0, 0, 7];
+        tx.protect_rtcp(&mut pkt).unwrap();
+        assert!(matches!(
+            rx.accept(pkt, now).as_slice(),
+            [RtcpEvent::Other { pt: 210, .. }]
+        ));
+        assert_eq!(rx.last_received, Some(now));
+        assert!(rx.check_timeout(start, now + RTCP_SILENCE_TIMEOUT).is_ok());
+    }
+
+    #[test]
+    fn rtcp_feedback_compound_packet_must_parse_in_full() {
+        let key = [7; KEY_LEN];
+        let mut tx = SrtpContext::new(&key);
+        let mut rx = RtcpFeedback::new(&key);
+        let start = Instant::now();
+        let mut compound = vec![0x80, rtcp::PT_RR, 0, 1, 0, 0, 0, 7];
+        compound.extend_from_slice(&[0x81, rtcp::PT_SDES, 0, 2, 0, 0, 0, 7, 1, 1, b'x', 0]);
+        let mut valid = compound.clone();
+        tx.protect_rtcp(&mut valid).unwrap();
+        assert_eq!(
+            rx.accept(valid, start),
+            [
+                RtcpEvent::ReceiverReport {
+                    ssrc: 7,
+                    blocks: Vec::new()
+                },
+                RtcpEvent::Sdes
+            ]
+        );
+
+        compound[11] = 10;
+        tx.protect_rtcp(&mut compound).unwrap();
+        let late = start + RTCP_SILENCE_TIMEOUT + Duration::from_millis(1);
+        assert!(rx.accept(compound, late).is_empty());
+        assert_eq!(rx.last_received, Some(start));
+        assert_eq!((rx.received, rx.valid, rx.malformed), (2, 1, 1));
+        assert!(rx.check_timeout(start, late).is_err());
+    }
+
+    #[test]
+    fn rtcp_feedback_drains_only_one_batch() {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let viewer = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.connect(viewer.local_addr().unwrap()).unwrap();
+        viewer.connect(sock.local_addr().unwrap()).unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let key = [7; KEY_LEN];
+        let mut tx = SrtpContext::new(&key);
+        let mut rx = RtcpFeedback::new(&key);
+        for _ in 0..=MAX_RTCP_BATCH {
+            viewer.send(&protected_report(&mut tx, false)).unwrap();
+        }
+        assert_eq!(rx.drain(&sock).len(), MAX_RTCP_BATCH);
+        assert_eq!(rx.received, MAX_RTCP_BATCH as u64);
+        assert_eq!(rx.drain(&sock).len(), 1);
+        assert!(rx.drain(&sock).is_empty());
+        assert_eq!(rx.valid, (MAX_RTCP_BATCH + 1) as u64);
+        assert_eq!(rx.recv_errors, 0);
+    }
 
     #[test]
     fn repick_only_auto_backend_unusable_on_capture_node() {

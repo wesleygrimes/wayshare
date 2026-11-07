@@ -24,8 +24,8 @@ such as PipeWire's `pipewire-pulse`. Without them, video works but there is no s
 
 - One High Performance viewer at a time. Later viewers get Standard mode, except a reconnect
   from the same address, which takes over.
-- If the viewer sends no feedback within 15 seconds of starting, or goes quiet for 10 seconds
-  later, the session falls back to Standard mode.
+- If the viewer sends no valid feedback within 15 seconds of starting, or stops sending
+  valid feedback for 10 seconds later, the session falls back to Standard mode.
 - When a session ends, including a dropped network or a session that crashes, wayshare
   releases held keys and buttons, stops the stream and restores the monitor. If the whole
   process is killed, the monitor keeps the Mac's mode until wayshare runs again.

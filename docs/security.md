@@ -86,15 +86,26 @@ running. A restart after Tailscale comes up retries the listeners.
 
 ## Ports
 
-| Default port | Use | Inbound firewall rule |
+| Default port | Use | Firewall access |
 |---|---|---|
 | TCP 5900 | Apple Screen Sharing | Required for Apple clients |
 | TCP 3389 | RDP over TLS, enabled by default | Required for RDP clients |
 | UDP 5353 | mDNS for Finder discovery | Optional. Not used for RDP discovery |
-| UDP 5960 and 5962 | Apple High Performance video and sound | Not needed. wayshare sends first, so replies use connection tracking |
+| UDP 5960 and 5962 | Apple High Performance video, sound, and feedback | Allow media to the Mac and feedback to wayshare. See below |
 
 `listen`, `rdp.listen`, and `hp.port` can change these ports. High Performance
 sound uses `hp.port + 2`.
+
+High Performance sends UDP media from wayshare to the Mac. The Mac sends RTCP
+feedback over the same connected sockets. Video uses `hp.port` on both
+devices, and sound uses `hp.port + 2` on both devices.
+
+A Mac-to-Linux rule for TCP 5900 alone does not cover this UDP traffic. Check
+that your tailnet policy and host firewalls allow media from Linux to the Mac
+and feedback from the Mac to Linux. Stateful policies can allow replies to
+permitted traffic without a separate return rule. Whether you need explicit
+rules in both directions depends on your policy and connection tracking.
+Scope any added access to the intended devices and configured ports.
 
 Setup offers ufw rules for TCP 5900 and the enabled RDP port, normally 3389.
 Existing installs need another setup run or a TCP 3389 rule for the LAN or VPN.
