@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.2 - 2026-11-07
+
+### Fixes
+
+- High Performance now requires authenticated, parseable video RTCP feedback to keep streaming. Non-RTCP packets, authentication failures, and malformed RTCP no longer postpone fallback to Standard mode. Timeouts remain 15 seconds for initial feedback and 10 seconds without further valid feedback.
+- Limit feedback processing to 32 UDP packets per loop pass so continuous incoming traffic leaves time for capture, timeout, and stop checks.
+
+### Diagnostics and documentation
+
+- Log the local media socket address and viewer endpoint. Add cumulative feedback and receive-error counters to `HP stats` and timeout errors. Authentication and parse failures warn once per HP stream.
+- Explain how logs distinguish selected Standard mode, missing HP negotiation, setup failures, and feedback loss. Clarify UDP traffic directions, default ports 5960 and 5962, and stateful firewall rules. Doctor does not test this UDP path.
+
+### Upgrade notes
+
+No configuration migration is required. If High Performance falls back, use the connection logs and [troubleshooting guide](https://github.com/wesleygrimes/wayshare/blob/v0.3.2/docs/troubleshooting.md#high-performance-is-unavailable-or-falls-back) to check negotiation and valid feedback. A feedback timeout alone does not prove a firewall problem.
+
+Thanks to [Matt](https://x.com/mbriggs_dev/status/2118891688001229109) for the configuration report that informed the network guidance.
+
+**Full changelog**: [v0.3.1...v0.3.2](https://github.com/wesleygrimes/wayshare/compare/v0.3.1...v0.3.2)
+
 ## 0.3.1 - 2026-11-07
 
 ### Fixes
