@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.1 - 2026-11-07
+
+### Fixes
+
+- Report the session's current display size and known scale to Mac Screen Sharing when a display configuration request cannot be applied or decoded. This addresses offset High Performance mouse clicks after a refused or failed resize. Successful changes still report the applied geometry. ([#83](https://github.com/wesleygrimes/wayshare/pull/83), addressing [#72](https://github.com/wesleygrimes/wayshare/issues/72))
+- Update `libz-sys` from 1.1.30 to 1.1.31 to address RUSTSEC-2026-0418, an environment-variable leak in its build script. Update the bundled license notice to match. ([#84](https://github.com/wesleygrimes/wayshare/pull/84))
+
+### Maintenance
+
+- Update the CI mise action from 5.2.1 to 5.2.4. ([#81](https://github.com/wesleygrimes/wayshare/pull/81))
+- Run compiling mise tasks through mr-boxington 1.29.2 and use its action in CI. Pin Rust 1.98 with rustfmt and clippy in mise. The release workflow continues to build with plain Cargo. ([#85](https://github.com/wesleygrimes/wayshare/pull/85))
+- Accept advisory RUSTSEC-2026-0441 for 0.3.1 because `async-dnssd` depends on unmaintained `pin-utils`.
+
+### Upgrade notes
+
+No configuration migration is required. Contributors who use mise should run `mise run setup` to install the pinned build tools before running the updated tasks. Direct Cargo builds remain available.
+
+Thanks to [Wes Grimes](https://github.com/wesleygrimes) for the display fix, dependency fix, and build changes, and to Dependabot for the CI dependency update.
+
+**Full changelog**: [v0.3.0...v0.3.1](https://github.com/wesleygrimes/wayshare/compare/v0.3.0...v0.3.1)
+
 ## 0.3.0 - 2026-10-28
 
 wayshare now works with RDP clients as well as Mac Screen Sharing.
