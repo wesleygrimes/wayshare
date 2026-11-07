@@ -99,7 +99,9 @@ impl RtcpFeedback {
         if let Err(e) = self.rx.unprotect_rtcp(&mut pkt) {
             self.unprotect_failed += 1;
             if self.unprotect_failed == 1 {
-                warn!("SRTCP unprotect failed: {e:#}");
+                warn!(
+                    "SRTCP unprotect failed: {e:#}; first occurrence, cumulative count in HP stats"
+                );
             }
             return Vec::new();
         }
@@ -108,7 +110,9 @@ impl RtcpFeedback {
             Err(e) => {
                 self.malformed += 1;
                 if self.malformed == 1 {
-                    warn!("RTCP parse failed: {e:#}");
+                    warn!(
+                        "RTCP parse failed: {e:#}; first occurrence, cumulative count in HP stats"
+                    );
                 }
                 return Vec::new();
             }
@@ -147,7 +151,7 @@ impl RtcpFeedback {
         };
         ensure!(
             now.duration_since(since) <= timeout,
-            "no valid video RTCP for {timeout:?} ({phase}); received={} valid={} non_rtcp={} unprotect_failed={} malformed={} recv_errors={} last_recv_error={:?}",
+            "no valid video RTCP for {timeout:?} ({phase}); HP stream totals: received={} valid={} non_rtcp={} unprotect_failed={} malformed={} recv_errors={} last_recv_error={:?}",
             self.received,
             self.valid,
             self.non_rtcp,
@@ -296,7 +300,8 @@ pub(super) fn run_media(p: MediaParams, stop: &AtomicBool) -> Result<MediaEnd> {
         warn!("SO_SNDBUF {SEND_BUFFER}: {e}");
     }
     info!(
-        peer = %p.peer,
+        local_bind = %local,
+        peer = %peer,
         port = p.port,
         sndbuf = sref.send_buffer_size().ok(),
         "HP media socket ready"
@@ -396,8 +401,7 @@ pub(super) fn run_media(p: MediaParams, stop: &AtomicBool) -> Result<MediaEnd> {
         first,
         start,
         &send_stats,
-    )
-    .with_context(|| format!("HP video UDP {local} -> {peer}"));
+    );
     // Dropping the encoder and the last sender closes the frame channel and ends the send thread.
     drop(frame_tx);
     drop(enc);
@@ -695,6 +699,36 @@ mod tests {
         ));
         assert_eq!(rx.last_received, Some(now));
         assert!(rx.check_timeout(start, now + RTCP_SILENCE_TIMEOUT).is_ok());
+    }
+
+    #[test]
+    fn rtcp_feedback_compound_packet_must_parse_in_full() {
+        let key = [7; KEY_LEN];
+        let mut tx = SrtpContext::new(&key);
+        let mut rx = RtcpFeedback::new(&key);
+        let start = Instant::now();
+        let mut compound = vec![0x80, rtcp::PT_RR, 0, 1, 0, 0, 0, 7];
+        compound.extend_from_slice(&[0x81, rtcp::PT_SDES, 0, 2, 0, 0, 0, 7, 1, 1, b'x', 0]);
+        let mut valid = compound.clone();
+        tx.protect_rtcp(&mut valid).unwrap();
+        assert_eq!(
+            rx.accept(valid, start),
+            [
+                RtcpEvent::ReceiverReport {
+                    ssrc: 7,
+                    blocks: Vec::new()
+                },
+                RtcpEvent::Sdes
+            ]
+        );
+
+        compound[11] = 10;
+        tx.protect_rtcp(&mut compound).unwrap();
+        let late = start + RTCP_SILENCE_TIMEOUT + Duration::from_millis(1);
+        assert!(rx.accept(compound, late).is_empty());
+        assert_eq!(rx.last_received, Some(start));
+        assert_eq!((rx.received, rx.valid, rx.malformed), (2, 1, 1));
+        assert!(rx.check_timeout(start, late).is_err());
     }
 
     #[test]

@@ -72,10 +72,41 @@ in [High Performance mode](high-performance.md). Only one High Performance viewe
 can connect at a time. Later viewers get Standard mode, except a reconnect from
 the same address, which takes over.
 
-If video starts and then falls back, check the network path for UDP feedback.
-wayshare falls back after 15 seconds without initial feedback or 10 seconds of
-silence during a session. For missing sound, check the audio requirements on the
-High Performance page. RDP has no sound support.
+If you selected Standard mode, wayshare uses RFB framebuffer updates and does
+not start the HP feedback timer. Standard mode alone does not show that HP failed.
+
+If you selected High Performance but the connection stays in Standard mode,
+follow the log while reconnecting. `SetEncodings` must include `1010` before
+wayshare offers HP ports. Look for `sent media stream ports`, then the Mac's
+`MediaStreamConfiguration`, then `HP media active; pausing RFB framebuffer updates`.
+If configuration fails before HP becomes active, look for `HP backend failed:`
+and its error details.
+If the Mac does not request HP, the UDP feedback timer has not started.
+An encoder check alone does not confirm that the Mac requested HP.
+Close the existing connection and select High Performance again. If it still
+fails, include your macOS build, Screen Sharing version, and connection logs in
+a bug report. Redact passwords, hostnames, and IP addresses.
+
+If HP starts and then falls back, look for `no valid video RTCP` before
+`HP media stopped; falling back to Standard mode`. Video falls back after
+15 seconds without initial authenticated, parseable RTCP feedback, or 10 seconds
+without further valid feedback. The timeout reports `initial feedback` or
+`after feedback`. Its counters reset for each HP stream.
+`HP media socket ready` shows the bound address and viewer endpoint. Check
+`HP stats` for cumulative `udp_received`, `rtcp`, `non_rtcp`,
+`srtcp_unprotect_failed`, `rtcp_malformed`, and `recv_errors` counts.
+Authentication and parse failures warn only on their first occurrence per HP stream.
+The counters continue to increase. A timeout identifies missing valid feedback,
+but does not by itself prove a firewall problem. For other failures, read the
+preceding `HP media stopped` error.
+
+On a tailnet, check UDP media access from wayshare to the Mac and feedback
+access back to wayshare. The default video and sound ports are 5960 and 5962.
+Doctor does not test this path. See [Ports](security.md#ports) for traffic
+directions, stateful return traffic, and the custom port setting.
+
+For missing sound, check the audio requirements on the High Performance page.
+RDP has no sound support.
 
 ## RDP
 
