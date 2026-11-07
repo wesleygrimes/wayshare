@@ -15,6 +15,7 @@ unsound = "all"
 ignore = [
   { id = "RUSTSEC-2023-0071", reason = "Connector 0.10 unconditionally links RSA through picky/sspi; only rustls ECDSA TLS and shared Apple credentials are used." },
   { id = "RUSTSEC-2023-0089", reason = "Connector 0.10 unconditionally enables sspi/scard, pulling heapless/atomic-polyfill; smart cards are unused." },
+  { id = "RUSTSEC-2026-0441", reason = "async-dnssd 0.5.1 depends on unmaintained pin-utils 0.1.1. Accept this advisory for release 0.3.1." },
 ]
 
 [sources]
