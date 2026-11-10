@@ -108,8 +108,14 @@ rules in both directions depends on your policy and connection tracking.
 Scope any added access to the intended devices and configured ports.
 
 Setup offers ufw rules for TCP 5900 and the enabled RDP port, normally 3389.
-Existing installs need another setup run or a TCP 3389 rule for the LAN or VPN.
-Other firewalls need their own rules. RDP has no mDNS advertisement.
+When High Performance is on, it also offers one rule for UDP `hp.port` and
+`hp.port + 2`, such as
+`sudo ufw allow from 192.168.1.0/24 to any port 5960,5962 proto udp`. The UDP
+rule has the same scope as the TCP 5900 rule. On an existing install, rerun
+`wayshare setup` to add missing rules, or add them yourself. Other firewalls
+need their own rules. RDP has no mDNS advertisement.
 
 `wayshare doctor` checks the Apple listener, its ufw rule, and the ufw rule for
-the RDP port. It does not check RDP connectivity or the RDP certificate.
+the RDP port. When High Performance is on, it also checks the UDP rule and names
+each UDP port that no rule allows. It does not check RDP connectivity or the RDP
+certificate.
