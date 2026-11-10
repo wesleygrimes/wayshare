@@ -477,16 +477,33 @@ impl HyprDisplay {
                 );
                 return Ok(None);
             }
-            Some(_) => {}
-            None => {
-                let current = hypr
-                    .outputs()?
-                    .into_iter()
-                    .find(|o| o.name == self.output)
-                    .with_context(|| format!("output {} not found", self.output))?;
-                *owner = Some((session, current));
-            }
+            _ => {}
         }
+        let mode = if crate::display::hyprland::is_drm_connector(&self.output) {
+            let advertised = hypr.advertised_modes(&self.output)?;
+            match crate::display::physical_mode(mode, &advertised) {
+                Some(m) => m,
+                None => {
+                    info!(
+                        output = %self.output,
+                        requested = ?(mode.width, mode.height),
+                        "monitor does not advertise this size; keeping its mode for the viewer to scale"
+                    );
+                    return Ok(None);
+                }
+            }
+        } else {
+            mode.clone()
+        };
+        if owner.is_none() {
+            let current = hypr
+                .outputs()?
+                .into_iter()
+                .find(|o| o.name == self.output)
+                .with_context(|| format!("output {} not found", self.output))?;
+            *owner = Some((session, current));
+        }
+        let mode = &mode;
         let actual = hypr.set_mode(&self.output, mode)?;
         info!(output = %self.output, requested = ?mode, ?actual, "output mode set");
         let px = |v: u32| v.min(u16::MAX as u32) as u16;

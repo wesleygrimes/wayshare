@@ -22,7 +22,12 @@ resize = true            # match the viewer's size, restore the monitor afterwar
 [Security](security.md#vpn-access).
 
 With `resize` on, wayshare switches the shared monitor to the size the RFB or RDP viewer
-requests and restores it on disconnect. One session owns mode changes at a time. RDP
+requests and restores it on disconnect. One session owns mode changes at a time.
+
+wayshare switches a physical monitor, including an HDMI or DisplayPort dummy plug, only to
+a size listed under `availableModes` in `hyprctl monitors`. For any other size, wayshare
+keeps the current mode and the viewer scales it. An unlisted mode can make a monitor lose
+signal and disconnect. Headless outputs still resize to any size. RDP
 scales frames to the client size when resizing is off or another session owns the mode.
 See [RDP](rdp.md) for dynamic resolution and size limits.
 

@@ -76,6 +76,36 @@ pub fn fit_mode(width: u32, height: u32, refresh_hz: f64, scale: f64) -> Display
     }
 }
 
+/// A pixel size and refresh rate a physical monitor advertises (from its EDID).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AdvertisedMode {
+    pub width: u32,
+    pub height: u32,
+    pub refresh_hz: f64,
+}
+
+/// Picks the mode to set on a physical monitor for `requested`, or `None` to leave it alone.
+///
+/// Custom modes can make a real panel lose sync and drop off the link, which ends capture.
+/// Only sizes the monitor advertises are used, at the advertised refresh closest to the
+/// request; otherwise the viewer scales the current mode instead.
+pub fn physical_mode(
+    requested: &DisplayMode,
+    advertised: &[AdvertisedMode],
+) -> Option<DisplayMode> {
+    let best = advertised
+        .iter()
+        .filter(|m| m.width == requested.width && m.height == requested.height)
+        .min_by(|a, b| {
+            let d = |m: &AdvertisedMode| (m.refresh_hz - requested.refresh_hz).abs();
+            d(a).total_cmp(&d(b))
+        })?;
+    Some(DisplayMode {
+        refresh_hz: best.refresh_hz,
+        ..requested.clone()
+    })
+}
+
 fn gcd(a: u32, b: u32) -> u32 {
     if b == 0 { a } else { gcd(b, a % b) }
 }
@@ -104,5 +134,39 @@ mod tests {
         let m = fit_mode(1001, 999, 60.0, 1.0);
         assert_eq!((m.width, m.height, m.scale), (1001, 999, 1.0));
         assert_eq!(fit_mode(1000, 1000, 60.0, 1.7).scale, 1.7);
+    }
+
+    #[test]
+    fn physical_mode_uses_only_advertised_sizes() {
+        let adv = |width, height, refresh_hz| AdvertisedMode {
+            width,
+            height,
+            refresh_hz,
+        };
+        let modes = [
+            adv(1920, 1080, 60.0),
+            adv(1920, 1080, 59.94),
+            adv(1920, 1080, 50.0),
+            adv(1280, 720, 60.0),
+        ];
+        let req = |width, height, refresh_hz| DisplayMode {
+            width,
+            height,
+            refresh_hz,
+            scale: 2.0,
+        };
+        // Sizes the Mac sent while its window was dragged; the panel lists none of them.
+        assert_eq!(physical_mode(&req(2780, 1842, 60.0), &modes), None);
+        assert_eq!(physical_mode(&req(3840, 2160, 60.0), &modes), None);
+        assert_eq!(physical_mode(&req(1920, 1080, 60.0), &[]), None);
+        // An advertised size keeps the requested scale and snaps to the closest refresh.
+        assert_eq!(
+            physical_mode(&req(1920, 1080, 59.9), &modes),
+            Some(req(1920, 1080, 59.94))
+        );
+        assert_eq!(
+            physical_mode(&req(1280, 720, 30.0), &modes),
+            Some(req(1280, 720, 60.0))
+        );
     }
 }
