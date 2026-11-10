@@ -1,7 +1,7 @@
 //! CPU frames for Standard (non-HP) mode. Uses system memory for linear offers and GBM
 //! for tiled offers. Converts to `source::Frame` pixels while finding changed rows.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 
@@ -9,25 +9,27 @@ use super::{CaptureOptions, Capturer, Memory};
 use crate::encode::Rect;
 use crate::source::{Frame, FrameSource};
 
+/// How often to try a new capture session after the compositor stopped the old one.
+const RECONNECT_INTERVAL: Duration = Duration::from_millis(500);
+
 pub struct CaptureSource {
     cap: Capturer,
+    output: Option<String>,
     frame: Frame,
     dirty: Vec<Rect>,
     poll: Duration,
+    /// Set while the session is stopped: when to try reconnecting next.
+    reconnect_at: Option<Instant>,
+    /// The next frame comes from a new session and must replace every pixel.
+    force_full: bool,
 }
 
 impl CaptureSource {
     /// Blocks (up to 5 s) for the first frame so `size` is known.
     pub fn new(output: Option<&str>) -> Result<Self> {
-        let cap = Capturer::with_options(
-            output,
-            CaptureOptions {
-                memory: Memory::System,
-                ..Default::default()
-            },
-        )?;
         let mut s = Self {
-            cap,
+            cap: open(output)?,
+            output: output.map(str::to_owned),
             frame: Frame {
                 width: 0,
                 height: 0,
@@ -35,6 +37,8 @@ impl CaptureSource {
             },
             dirty: Vec::new(),
             poll: Duration::from_millis(1),
+            reconnect_at: None,
+            force_full: false,
         };
         for _ in 0..50 {
             if s.try_advance()? {
@@ -66,6 +70,7 @@ impl CaptureSource {
         let buf = &captured.buffer;
         let (w, h) = (buf.width as usize, buf.height as usize);
         let resized = (w, h) != (self.frame.width as usize, self.frame.height as usize);
+        let full = resized || std::mem::take(&mut self.force_full);
         if resized {
             let (Ok(w16), Ok(h16)) = (u16::try_from(w), u16::try_from(h)) else {
                 bail!("{w}x{h} exceeds the RFB frame size limit");
@@ -77,9 +82,48 @@ impl CaptureSource {
             };
         }
 
-        buf.with_read(|guard| copy_frame(&mut self.frame, &mut self.dirty, guard, resized))?;
+        buf.with_read(|guard| copy_frame(&mut self.frame, &mut self.dirty, guard, full))?;
         Ok(!self.dirty.is_empty())
     }
+
+    /// Replaces a stopped capture session. The compositor stops it when the output goes
+    /// away, such as a monitor that drops off its cable during a mode change. Keeps the last
+    /// frame on screen and retries until the output is back.
+    fn reconnect(&mut self) -> bool {
+        let now = Instant::now();
+        match self.reconnect_at {
+            Some(at) if now < at => return false,
+            Some(_) => {}
+            None => tracing::warn!(
+                output = ?self.output,
+                "capture session stopped; reconnecting when the output is available"
+            ),
+        }
+        match open(self.output.as_deref()) {
+            Ok(cap) => {
+                self.cap = cap;
+                self.reconnect_at = None;
+                self.force_full = true;
+                tracing::info!(output = ?self.output, "capture session reconnected");
+                true
+            }
+            Err(e) => {
+                tracing::debug!("capture reconnect failed: {e:#}");
+                self.reconnect_at = Some(now + RECONNECT_INTERVAL);
+                false
+            }
+        }
+    }
+}
+
+fn open(output: Option<&str>) -> Result<Capturer> {
+    Capturer::with_options(
+        output,
+        CaptureOptions {
+            memory: Memory::System,
+            ..Default::default()
+        },
+    )
 }
 
 fn copy_frame(
@@ -141,10 +185,18 @@ impl FrameSource for CaptureSource {
     }
 
     fn advance(&mut self) -> bool {
-        self.try_advance().unwrap_or_else(|e| {
-            tracing::error!("capture: {e:#}");
-            false
-        })
+        if (self.reconnect_at.is_some() || self.cap.stopped()) && !self.reconnect() {
+            return false;
+        }
+        match self.try_advance() {
+            Ok(changed) => changed,
+            // The next call reconnects and logs it.
+            Err(_) if self.cap.stopped() => false,
+            Err(e) => {
+                tracing::error!("capture: {e:#}");
+                false
+            }
+        }
     }
 
     fn frame(&self) -> &Frame {

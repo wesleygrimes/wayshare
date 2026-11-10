@@ -226,6 +226,12 @@ impl Capturer {
         }
     }
 
+    /// True once the compositor ended the session, for example because the output went away.
+    /// A stopped capturer never delivers frames again; create a new one.
+    pub fn stopped(&self) -> bool {
+        self.state.stopped
+    }
+
     /// DRM render node of the GPU the buffers live on.
     pub fn render_node(&self) -> &PathBuf {
         self.state.alloc.render_node()

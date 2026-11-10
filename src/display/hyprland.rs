@@ -10,7 +10,7 @@ use serde_json::Value;
 use tracing::{debug, warn};
 
 use super::exclusive::{DesktopManager, DesktopSnapshot, WorkspaceInfo};
-use super::{DisplayManager, DisplayMode, OutputInfo};
+use super::{AdvertisedMode, DisplayManager, DisplayMode, OutputInfo};
 
 const MIN_VERSION: (u64, u64) = (0, 56);
 
@@ -47,6 +47,12 @@ impl Hyprland {
             MIN_VERSION.1
         );
         Ok(())
+    }
+
+    /// Modes `output` advertises. Headless outputs list one too, so pair this with
+    /// [`is_drm_connector`] to tell a real monitor apart.
+    pub fn advertised_modes(&self, output: &str) -> Result<Vec<AdvertisedMode>> {
+        parse_available_modes(&self.request("j/monitors all")?, output)
     }
 
     fn ok(&self, cmd: &str) -> Result<()> {
@@ -283,6 +289,54 @@ pub fn parse_monitors(json: &str) -> Result<Vec<OutputInfo>> {
         .collect()
 }
 
+/// Parses `availableModes` entries such as `1920x1080@60.00Hz` for `output`. Entries that
+/// don't parse are skipped.
+pub fn parse_available_modes(json: &str, output: &str) -> Result<Vec<AdvertisedMode>> {
+    let v: Value = serde_json::from_str(json).context("monitors JSON")?;
+    let monitor = v
+        .as_array()
+        .ok_or_else(|| anyhow!("monitors: not an array"))?
+        .iter()
+        .find(|m| m["name"].as_str() == Some(output))
+        .ok_or_else(|| anyhow!("no output {output}"))?;
+    let Some(modes) = monitor["availableModes"].as_array() else {
+        return Ok(Vec::new());
+    };
+    Ok(modes
+        .iter()
+        .filter_map(|m| {
+            let (size, hz) = m.as_str()?.split_once('@')?;
+            let (w, h) = size.split_once('x')?;
+            Some(AdvertisedMode {
+                width: w.parse().ok()?,
+                height: h.parse().ok()?,
+                refresh_hz: hz.trim_end_matches("Hz").parse().ok()?,
+            })
+        })
+        .collect())
+}
+
+/// True when `output` is a DRM connector (a cable to a monitor or dummy plug), as opposed to
+/// a headless or nested output. The kernel names connector directories `card<N>-<output>`.
+pub fn is_drm_connector(output: &str) -> bool {
+    is_drm_connector_in(Path::new("/sys/class/drm"), output)
+}
+
+fn is_drm_connector_in(drm: &Path, output: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(drm) else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        e.file_name().to_str().is_some_and(|n| {
+            n.strip_prefix("card")
+                .and_then(|rest| rest.split_once('-'))
+                .is_some_and(|(card, name)| {
+                    !card.is_empty() && card.bytes().all(|b| b.is_ascii_digit()) && name == output
+                })
+        })
+    })
+}
+
 impl DisplayManager for Hyprland {
     fn outputs(&mut self) -> Result<Vec<OutputInfo>> {
         parse_monitors(&self.request("j/monitors all")?)
@@ -452,6 +506,45 @@ mod tests {
         "id": 1, "name": "ARDTEST-1", "width": 2001, "height": 1333, "refreshRate": 30.0,
         "x": 1728, "y": 0, "scale": 1, "focused": false, "disabled": false
     }]"#;
+
+    #[test]
+    fn parses_available_modes() {
+        let json = r#"[{"name": "HDMI-A-1",
+            "availableModes": ["1920x1080@60.00Hz", "1920x1080@59.94Hz", "bogus", "1280x720@50.00Hz"]
+        }, {"name": "ARDTEST-1"}]"#;
+        let modes = parse_available_modes(json, "HDMI-A-1").unwrap();
+        let sizes: Vec<_> = modes
+            .iter()
+            .map(|m| (m.width, m.height, m.refresh_hz))
+            .collect();
+        assert_eq!(
+            sizes,
+            [(1920, 1080, 60.0), (1920, 1080, 59.94), (1280, 720, 50.0)]
+        );
+        assert!(parse_available_modes(json, "ARDTEST-1").unwrap().is_empty());
+        assert!(parse_available_modes(json, "DP-9").is_err());
+    }
+
+    #[test]
+    fn detects_drm_connectors() {
+        let dir = std::env::temp_dir().join(format!("wayshare-drm-{}", std::process::id()));
+        for d in [
+            "card1",
+            "card1-HDMI-A-1",
+            "card1-DP-2",
+            "renderD128",
+            "cardX-DP-3",
+        ] {
+            std::fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        assert!(is_drm_connector_in(&dir, "HDMI-A-1"));
+        assert!(is_drm_connector_in(&dir, "DP-2"));
+        assert!(!is_drm_connector_in(&dir, "HEADLESS-1"));
+        assert!(!is_drm_connector_in(&dir, "DP-3"));
+        assert!(!is_drm_connector_in(&dir, "HDMI-A"));
+        assert!(!is_drm_connector_in(&dir.join("missing"), "HDMI-A-1"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn parses_monitors() {
