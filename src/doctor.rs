@@ -10,7 +10,7 @@ use crate::config::Settings;
 use crate::display::DisplayManager;
 use crate::display::hyprland::Hyprland;
 use crate::rfb::srp::VerifierRecord;
-use crate::setup::{self, Firewall};
+use crate::setup::{self, Firewall, Proto};
 use crate::ui;
 
 #[derive(Default)]
@@ -160,11 +160,11 @@ pub fn run() -> Result<bool> {
     let addrs = setup::interface_addrs();
     let bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == s.listen.ip());
     let lan_ip = bound.map(|a| a.ip).or_else(setup::lan_ipv4);
-    let hint = || setup::ufw_hint(port, bound, lan_ip, &addrs);
-    match setup::firewall(s.listen) {
+    let hint = || setup::ufw_hint(Proto::Tcp, &[port], bound, lan_ip, &addrs);
+    match setup::firewall(Proto::Tcp, s.listen.ip(), &[port]) {
         Firewall::Off => r.ok("Firewall", "ufw is off"),
         Firewall::Allows => r.ok("Firewall", &format!("ufw allows TCP {port}")),
-        Firewall::Blocks => r.fail(
+        Firewall::Blocks(_) => r.fail(
             "Firewall",
             &format!("ufw has no rule for TCP {port}"),
             &hint(),
@@ -180,11 +180,11 @@ pub fn run() -> Result<bool> {
         let rdp_listen = s.rdp_listen();
         let rdp_bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == rdp_listen.ip());
         let rdp_ip = rdp_bound.map(|a| a.ip).or_else(setup::lan_ipv4);
-        let rdp_hint = || setup::ufw_hint(rdp_port, rdp_bound, rdp_ip, &addrs);
-        match setup::firewall(rdp_listen) {
+        let rdp_hint = || setup::ufw_hint(Proto::Tcp, &[rdp_port], rdp_bound, rdp_ip, &addrs);
+        match setup::firewall(Proto::Tcp, rdp_listen.ip(), &[rdp_port]) {
             Firewall::Off => r.ok("RDP firewall", "ufw is off"),
             Firewall::Allows => r.ok("RDP firewall", &format!("ufw allows TCP {rdp_port}")),
-            Firewall::Blocks => r.warn(
+            Firewall::Blocks(_) => r.warn(
                 "RDP firewall",
                 &format!("ufw has no rule for TCP {rdp_port}"),
                 &format!("for RDP clients on other machines: {}", rdp_hint()),
@@ -193,6 +193,31 @@ pub fn run() -> Result<bool> {
                 "RDP firewall",
                 &format!("ufw is on; can't read its rules without root to check TCP {rdp_port}"),
                 &format!("if RDP clients can't connect: {}", rdp_hint()),
+            ),
+        }
+    }
+
+    // The Mac sends High Performance feedback to the Apple listener's address, so the
+    // rule gets that listener's scope. Without it video still runs on ufw's stateful
+    // return path, but sound waits about 5 s for feedback that never arrives.
+    if let Some(hp) = setup::hp_firewall_ports(&s) {
+        let all = setup::port_list(&hp);
+        let hp_hint = |ports: &[u16]| setup::ufw_hint(Proto::Udp, ports, bound, lan_ip, &addrs);
+        match setup::firewall(Proto::Udp, s.listen.ip(), &hp) {
+            Firewall::Off => r.ok("HP firewall", "ufw is off"),
+            Firewall::Allows => r.ok("HP firewall", &format!("ufw allows UDP {all}")),
+            Firewall::Blocks(missing) => r.warn(
+                "HP firewall",
+                &format!("ufw has no rule for UDP {}", setup::port_list(&missing)),
+                &format!(
+                    "for High Performance feedback from the Mac: {}",
+                    hp_hint(&missing)
+                ),
+            ),
+            Firewall::Unknown => r.warn(
+                "HP firewall",
+                &format!("ufw is on; can't read its rules without root to check UDP {all}"),
+                &format!("if High Performance sound starts late: {}", hp_hint(&hp)),
             ),
         }
     }

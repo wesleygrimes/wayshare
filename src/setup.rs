@@ -79,12 +79,37 @@ pub fn run() -> Result<()> {
 
     let bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == listen.ip());
     let ip = bound.map(|a| a.ip).or_else(lan_ipv4);
-    firewall_step(listen, bound, ip, &addrs)?;
+    let no_connect = "skipped; clients may not be able to connect";
+    let apple = [listen.port()];
+    firewall_step(
+        Proto::Tcp,
+        listen.ip(),
+        &apple,
+        bound,
+        ip,
+        &addrs,
+        no_connect,
+    )?;
     let rdp_listen = settings.rdp_listen();
     if settings.rdp.enabled && !rdp_listen.ip().is_loopback() {
         let rdp_bound = addrs.iter().find(|a| IpAddr::V4(a.ip) == rdp_listen.ip());
         let rdp_ip = rdp_bound.map(|a| a.ip).or_else(lan_ipv4);
-        firewall_step(rdp_listen, rdp_bound, rdp_ip, &addrs)?;
+        let rdp = [rdp_listen.port()];
+        firewall_step(
+            Proto::Tcp,
+            rdp_listen.ip(),
+            &rdp,
+            rdp_bound,
+            rdp_ip,
+            &addrs,
+            no_connect,
+        )?;
+    }
+    // The Mac sends High Performance feedback to the address it used for the Apple
+    // listener, so the UDP rule gets that listener's scope.
+    if let Some(hp) = hp_firewall_ports(&settings) {
+        let late = "skipped; High Performance sound may start late";
+        firewall_step(Proto::Udp, listen.ip(), &hp, bound, ip, &addrs, late)?;
     }
 
     let name = settings.name.clone().unwrap_or_else(hostname);
@@ -107,28 +132,43 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+/// Offers one ufw rule for the `ports` on `ip` that ufw doesn't already allow. `skipped` is
+/// the warning shown when the user declines.
 fn firewall_step(
-    listen: SocketAddr,
+    proto: Proto,
+    ip: IpAddr,
+    ports: &[u16],
     bound: Option<&InterfaceAddr>,
     lan_ip: Option<Ipv4Addr>,
     addrs: &[InterfaceAddr],
+    skipped: &str,
 ) -> Result<()> {
-    let port = listen.port();
-    let why = match firewall(listen) {
+    let all = port_list(ports);
+    let (why, ports) = match firewall(proto, ip, ports) {
         Firewall::Off => {
             ui::done("Firewall", "ufw is off");
             return Ok(());
         }
         Firewall::Allows => {
-            ui::done("Firewall", &format!("ufw allows TCP {port}"));
+            ui::done("Firewall", &format!("ufw allows {proto} {all}"));
             return Ok(());
         }
-        Firewall::Blocks => format!("ufw is on and has no rule for TCP {port}."),
-        Firewall::Unknown => format!("ufw is on; checking for a TCP {port} rule needs root."),
+        Firewall::Blocks(missing) => (
+            format!(
+                "ufw is on and has no rule for {proto} {}.",
+                port_list(&missing)
+            ),
+            missing,
+        ),
+        Firewall::Unknown => (
+            format!("ufw is on; checking for a {proto} {all} rule needs root."),
+            ports.to_vec(),
+        ),
     };
-    let rule = ufw_rule(port, bound, lan_ip, addrs);
+    let ports_text = port_list(&ports);
+    let rule = ufw_rule(proto, &ports, bound, lan_ip, addrs);
     let command = format!("sudo ufw {}", rule.join(" "));
-    let add = Confirm::new(format!("Allow TCP {port} through the firewall?"))
+    let add = Confirm::new(format!("Allow {proto} {ports_text} through the firewall?"))
         .description(&format!(
             "{why} Runs `{command}`; sudo asks for your password."
         ))
@@ -137,7 +177,7 @@ fn firewall_step(
         .theme(crate::ui::theme())
         .run()?;
     if !add {
-        ui::warn("Firewall", "skipped; clients may not be able to connect");
+        ui::warn("Firewall", skipped);
         ui::hint(&command);
         return Ok(());
     }
@@ -149,7 +189,7 @@ fn firewall_step(
         .output()
         .context("running sudo")?;
     if out.status.success() {
-        ui::done("Firewall", &format!("ufw allows TCP {port}"));
+        ui::done("Firewall", &format!("ufw allows {proto} {ports_text}"));
     } else {
         ui::fail("Firewall", "couldn't add the rule");
         ui::hint(&command);
@@ -371,10 +411,50 @@ pub fn subnet(ip: Ipv4Addr, prefix: u8) -> String {
     format!("{}/{prefix}", Ipv4Addr::from(u32::from(ip) & mask))
 }
 
-/// The ufw arguments that allow `port`: by interface when wayshare listens on one, else by LAN
-/// range.
+/// A transport protocol, for ufw rules and messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Proto {
+    Tcp,
+    Udp,
+}
+
+impl Proto {
+    /// The name ufw uses in commands and in its `### tuple ###` lines.
+    fn ufw(self) -> &'static str {
+        match self {
+            Proto::Tcp => "tcp",
+            Proto::Udp => "udp",
+        }
+    }
+}
+
+impl std::fmt::Display for Proto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Proto::Tcp => "TCP",
+            Proto::Udp => "UDP",
+        })
+    }
+}
+
+/// Ports for messages, such as `5960 and 5962`.
+pub fn port_list(ports: &[u16]) -> String {
+    let ports: Vec<String> = ports.iter().map(u16::to_string).collect();
+    ports.join(" and ")
+}
+
+/// The UDP ports that receive High Performance feedback from the Mac: `hp.port` for video
+/// and `hp.port + 2` for sound. `None` when High Performance is off.
+pub fn hp_firewall_ports(s: &Settings) -> Option<[u16; 2]> {
+    let audio = s.hp.port.checked_add(2)?;
+    s.hp.enabled.then_some([s.hp.port, audio])
+}
+
+/// The ufw arguments that allow `ports`: by interface when wayshare listens on one, else by
+/// LAN range. ufw needs `proto` when a rule lists more than one port.
 pub fn ufw_rule(
-    port: u16,
+    proto: Proto,
+    ports: &[u16],
     bound: Option<&InterfaceAddr>,
     lan_ip: Option<Ipv4Addr>,
     addrs: &[InterfaceAddr],
@@ -389,19 +469,22 @@ pub fn ufw_rule(
             rule.extend(["from".into(), range]);
         }
     }
-    rule.extend(["to", "any", "port", &port.to_string(), "proto", "tcp"].map(String::from));
+    let ports: Vec<String> = ports.iter().map(u16::to_string).collect();
+    rule.extend(["to".into(), "any".into(), "port".into(), ports.join(",")]);
+    rule.extend(["proto".into(), proto.ufw().into()]);
     rule
 }
 
 pub fn ufw_hint(
-    port: u16,
+    proto: Proto,
+    ports: &[u16],
     bound: Option<&InterfaceAddr>,
     lan_ip: Option<Ipv4Addr>,
     addrs: &[InterfaceAddr],
 ) -> String {
     format!(
         "sudo ufw {}",
-        ufw_rule(port, bound, lan_ip, addrs).join(" ")
+        ufw_rule(proto, ports, bound, lan_ip, addrs).join(" ")
     )
 }
 
@@ -409,29 +492,43 @@ pub fn ufw_hint(
 pub enum Firewall {
     Off,
     Allows,
-    Blocks,
+    /// ufw is on and no rule allows these ports. Ports that a rule allows are left out.
+    Blocks(Vec<u16>),
     /// ufw is on, but its rules are only readable by root.
     Unknown,
 }
 
-/// Checks ufw for an inbound TCP rule that reaches `listen`. IPv6 listeners are checked
-/// against `user6.rules`, IPv4 ones against `user.rules`, matching how ufw splits them.
-pub fn firewall(listen: SocketAddr) -> Firewall {
+/// Checks ufw for inbound `proto` rules that reach each of `ports` on `ip`. ufw matches
+/// each packet's port separately, so every port needs a rule that reaches it. A rule for
+/// one of two ports leaves the other in `Blocks`. IPv6 addresses are checked against
+/// `user6.rules`, IPv4 ones against `user.rules`, matching how ufw splits them.
+pub fn firewall(proto: Proto, ip: IpAddr, ports: &[u16]) -> Firewall {
     let Ok(conf) = std::fs::read_to_string("/etc/ufw/ufw.conf") else {
         return Firewall::Off;
     };
     if !ufw_enabled(&conf) {
         return Firewall::Off;
     }
-    match std::fs::read_to_string(ufw_rules_file(listen)) {
-        Ok(rules) if ufw_allows(&rules, listen) => Firewall::Allows,
-        Ok(_) => Firewall::Blocks,
+    match std::fs::read_to_string(ufw_rules_file(ip)) {
+        Ok(rules) => match ufw_missing(&rules, proto, ip, ports) {
+            missing if missing.is_empty() => Firewall::Allows,
+            missing => Firewall::Blocks(missing),
+        },
         Err(_) => Firewall::Unknown,
     }
 }
 
-fn ufw_rules_file(listen: SocketAddr) -> &'static str {
-    if listen.is_ipv6() {
+/// The `ports` on `ip` that no rule in `rules` allows.
+fn ufw_missing(rules: &str, proto: Proto, ip: IpAddr, ports: &[u16]) -> Vec<u16> {
+    ports
+        .iter()
+        .copied()
+        .filter(|&port| !ufw_allows(rules, proto, SocketAddr::new(ip, port)))
+        .collect()
+}
+
+fn ufw_rules_file(ip: IpAddr) -> &'static str {
+    if ip.is_ipv6() {
         "/etc/ufw/user6.rules"
     } else {
         "/etc/ufw/user.rules"
@@ -480,25 +577,25 @@ impl<'a> UfwRule<'a> {
         })
     }
 
-    /// Whether the rule applies to some inbound TCP traffic for `listen`. A listener on an
-    /// unspecified address accepts traffic for every local address, so any destination
+    /// Whether the rule applies to some inbound `proto` traffic for `listen`. A listener on
+    /// an unspecified address accepts traffic for every local address, so any destination
     /// counts; otherwise the destination must contain the listener's address.
-    fn reaches(&self, listen: SocketAddr) -> bool {
-        matches!(self.proto, "tcp" | "any")
+    fn reaches(&self, proto: Proto, listen: SocketAddr) -> bool {
+        (self.proto == proto.ufw() || self.proto == "any")
             && ufw_port_matches(self.port, listen.port())
             && self.direction.starts_with("in")
             && (listen.ip().is_unspecified() || ufw_net_contains(self.dst, listen.ip()))
     }
 
-    /// Whether the rule covers every inbound TCP connection to `listen`: any source and
+    /// Whether the rule covers all inbound `proto` traffic to `listen`: any source and
     /// source port, every interface, and a destination that includes the listener's address.
-    fn covers(&self, listen: SocketAddr) -> bool {
+    fn covers(&self, proto: Proto, listen: SocketAddr) -> bool {
         let dst_covers = if listen.ip().is_unspecified() {
             ufw_net_is_any(self.dst)
         } else {
             ufw_net_contains(self.dst, listen.ip())
         };
-        self.reaches(listen)
+        self.reaches(proto, listen)
             && self.direction == "in"
             && self.src_port == "any"
             && ufw_net_is_any(self.src)
@@ -510,11 +607,11 @@ impl<'a> UfwRule<'a> {
 /// the first matching rule, so a `deny` or `reject` that covers every connection to
 /// `listen` hides any allow after it. A narrower deny, such as one for a single source,
 /// leaves the later allow in effect for other clients.
-fn ufw_allows(rules: &str, listen: SocketAddr) -> bool {
+fn ufw_allows(rules: &str, proto: Proto, listen: SocketAddr) -> bool {
     for rule in rules.lines().filter_map(UfwRule::parse) {
         match rule.action {
-            "allow" | "limit" if rule.reaches(listen) => return true,
-            "deny" | "reject" if rule.covers(listen) => return false,
+            "allow" | "limit" if rule.reaches(proto, listen) => return true,
+            "deny" | "reject" if rule.covers(proto, listen) => return false,
             _ => {}
         }
     }
@@ -650,11 +747,17 @@ mod tests {
     fn hints_a_ufw_rule() {
         let addrs = parse_addrs(IP_ADDR);
         assert_eq!(
-            ufw_hint(5900, None, Some(addrs[1].ip), &addrs),
+            ufw_hint(Proto::Tcp, &[5900], None, Some(addrs[1].ip), &addrs),
             "sudo ufw allow from 192.168.1.0/24 to any port 5900 proto tcp"
         );
         assert_eq!(
-            ufw_hint(5900, Some(&addrs[2]), Some(addrs[2].ip), &addrs),
+            ufw_hint(
+                Proto::Tcp,
+                &[5900],
+                Some(&addrs[2]),
+                Some(addrs[2].ip),
+                &addrs
+            ),
             "sudo ufw allow in on tailscale0 to any port 5900 proto tcp"
         );
     }
@@ -665,6 +768,87 @@ mod tests {
         assert_eq!(subnet(ip, 24), "192.168.1.0/24");
         assert_eq!(subnet("10.1.2.3".parse().unwrap(), 12), "10.0.0.0/12");
         assert_eq!(subnet(ip, 0), "0.0.0.0/0");
+    }
+
+    #[test]
+    fn hints_a_udp_rule_for_high_performance() {
+        let addrs = parse_addrs(IP_ADDR);
+        let mut s = Settings::default();
+        let hp = hp_firewall_ports(&s).unwrap();
+        assert_eq!(hp, [5960, 5962]);
+        assert_eq!(
+            ufw_hint(Proto::Udp, &hp, None, Some(addrs[1].ip), &addrs),
+            "sudo ufw allow from 192.168.1.0/24 to any port 5960,5962 proto udp"
+        );
+        assert_eq!(
+            ufw_hint(Proto::Udp, &hp, Some(&addrs[2]), Some(addrs[2].ip), &addrs),
+            "sudo ufw allow in on tailscale0 to any port 5960,5962 proto udp"
+        );
+        s.hp.port = 6000;
+        let hp = hp_firewall_ports(&s).unwrap();
+        assert_eq!(
+            ufw_hint(Proto::Udp, &hp, None, Some(addrs[1].ip), &addrs),
+            "sudo ufw allow from 192.168.1.0/24 to any port 6000,6002 proto udp"
+        );
+        assert_eq!(
+            ufw_hint(Proto::Udp, &[6002], None, Some(addrs[1].ip), &addrs),
+            "sudo ufw allow from 192.168.1.0/24 to any port 6002 proto udp"
+        );
+        assert_eq!(port_list(&hp), "6000 and 6002");
+        s.hp.port = 65534;
+        assert_eq!(hp_firewall_ports(&s), None);
+        s.hp.port = 5960;
+        s.hp.enabled = false;
+        assert_eq!(hp_firewall_ports(&s), None);
+    }
+
+    #[test]
+    fn finds_the_hp_ports_ufw_lacks() {
+        // The first tuple is what `ufw allow from 192.168.1.0/24 to any port 5960,5962
+        // proto udp` writes. ufw writes ranges as `low:high`.
+        let missing = |rule: &str| {
+            let rules = format!("### tuple ### {rule}\n");
+            ufw_missing(&rules, Proto::Udp, any4(0).ip(), &[5960, 5962])
+        };
+        for rule in [
+            "allow udp 5960,5962 0.0.0.0/0 any 192.168.1.0/24 in",
+            "allow udp 5960:5962 0.0.0.0/0 any 0.0.0.0/0 in",
+            "allow udp 5900,5960:5970 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0",
+            "allow any 5960,5962 0.0.0.0/0 any 0.0.0.0/0 in",
+            "allow any any 0.0.0.0/0 any 192.168.1.0/24 in",
+        ] {
+            assert_eq!(missing(rule), [] as [u16; 0], "{rule}");
+        }
+        assert_eq!(missing("allow udp 5960 0.0.0.0/0 any 0.0.0.0/0 in"), [5962]);
+        assert_eq!(missing("allow udp 5962 0.0.0.0/0 any 0.0.0.0/0 in"), [5960]);
+        assert_eq!(
+            missing("allow udp 5961:5970 0.0.0.0/0 any 0.0.0.0/0 in"),
+            [5960]
+        );
+        for rule in [
+            "allow tcp 5960,5962 0.0.0.0/0 any 0.0.0.0/0 in",
+            "allow tcp 5900 0.0.0.0/0 any 192.168.1.0/24 in",
+            "allow udp 5960,5962 0.0.0.0/0 any 0.0.0.0/0 out",
+        ] {
+            assert_eq!(missing(rule), [5960, 5962], "{rule}");
+        }
+        // A UDP deny hides a later allow; a TCP deny doesn't.
+        let allow = "### tuple ### allow any any 0.0.0.0/0 any 192.168.1.0/24 in\n";
+        let deny = format!("### tuple ### deny udp 5962 0.0.0.0/0 any 0.0.0.0/0 in\n{allow}");
+        assert_eq!(
+            ufw_missing(&deny, Proto::Udp, any4(0).ip(), &[5960, 5962]),
+            [5962]
+        );
+        let tcp_deny = format!("### tuple ### deny tcp 5962 0.0.0.0/0 any 0.0.0.0/0 in\n{allow}");
+        assert!(ufw_missing(&tcp_deny, Proto::Udp, any4(0).ip(), &[5960, 5962]).is_empty());
+        assert!(!tcp_allows(
+            "### tuple ### allow udp 5900 0.0.0.0/0 any 0.0.0.0/0 in\n",
+            any4(5900)
+        ));
+    }
+
+    fn tcp_allows(rules: &str, listen: SocketAddr) -> bool {
+        ufw_allows(rules, Proto::Tcp, listen)
     }
 
     fn any4(port: u16) -> SocketAddr {
@@ -678,25 +862,25 @@ mod tests {
         let rules = "### tuple ### allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in\n\
                      -A ufw-user-input -p tcp --dport 22 -j ACCEPT\n\
                      ### tuple ### allow tcp 5900 0.0.0.0/0 any 192.168.1.0/24 in\n";
-        assert!(ufw_allows(rules, any4(5900)));
-        assert!(!ufw_allows(rules, any4(5901)));
-        assert!(!ufw_allows(
+        assert!(tcp_allows(rules, any4(5900)));
+        assert!(!tcp_allows(rules, any4(5901)));
+        assert!(!tcp_allows(
             "### tuple ### deny tcp 5900 0.0.0.0/0 any 0.0.0.0/0 in\n",
             any4(5900)
         ));
-        assert!(ufw_allows(
+        assert!(tcp_allows(
             "### tuple ### allow any 5900 0.0.0.0/0 any 0.0.0.0/0 in\n",
             any4(5900)
         ));
-        assert!(ufw_allows(
+        assert!(tcp_allows(
             "### tuple ### allow tcp 5900 0.0.0.0/0 any 0.0.0.0/0 in_tailscale0\n",
             any4(5900)
         ));
-        assert!(!ufw_allows(
+        assert!(!tcp_allows(
             "### tuple ### allow tcp 5900 0.0.0.0/0 any 0.0.0.0/0 out\n",
             any4(5900)
         ));
-        assert!(ufw_allows(
+        assert!(tcp_allows(
             "### tuple ### allow tcp 5900 0.0.0.0/0 any 192.168.1.0/24 in comment=6d6163\n",
             any4(5900)
         ));
@@ -710,7 +894,11 @@ mod tests {
             ("[::]:3389", "/etc/ufw/user6.rules"),
             ("[fd00::5]:3389", "/etc/ufw/user6.rules"),
         ] {
-            assert_eq!(ufw_rules_file(listen.parse().unwrap()), file, "{listen}");
+            assert_eq!(
+                ufw_rules_file(listen.parse::<SocketAddr>().unwrap().ip()),
+                file,
+                "{listen}"
+            );
         }
     }
 
@@ -730,7 +918,7 @@ mod tests {
             "allow tcp 3389 0.0.0.0/0 any 0.0.0.0/0 RDP - in",
         ] {
             assert!(
-                ufw_allows(&format!("### tuple ### {rule}\n"), any4(3389)),
+                tcp_allows(&format!("### tuple ### {rule}\n"), any4(3389)),
                 "{rule}"
             );
         }
@@ -745,7 +933,7 @@ mod tests {
             "allow tcp 3389 0.0.0.0/0 any",
         ] {
             assert!(
-                !ufw_allows(&format!("### tuple ### {rule}\n"), any4(3389)),
+                !tcp_allows(&format!("### tuple ### {rule}\n"), any4(3389)),
                 "{rule}"
             );
         }
@@ -755,18 +943,18 @@ mod tests {
     fn matches_the_ufw_rule_destination_to_the_listener() {
         let lan_only = "### tuple ### allow any any 192.168.1.50 any 192.168.1.0/24 in\n";
         let to = |a: &str| a.parse::<SocketAddr>().unwrap();
-        assert!(ufw_allows(lan_only, to("192.168.1.50:3389")));
-        assert!(ufw_allows(lan_only, to("0.0.0.0:3389")));
-        assert!(!ufw_allows(lan_only, to("100.64.0.1:3389")));
+        assert!(tcp_allows(lan_only, to("192.168.1.50:3389")));
+        assert!(tcp_allows(lan_only, to("0.0.0.0:3389")));
+        assert!(!tcp_allows(lan_only, to("100.64.0.1:3389")));
         let subnet = "### tuple ### allow tcp 3389 192.168.1.0/24 any 0.0.0.0/0 in\n";
-        assert!(ufw_allows(subnet, to("192.168.1.50:3389")));
-        assert!(!ufw_allows(subnet, to("10.0.0.5:3389")));
+        assert!(tcp_allows(subnet, to("192.168.1.50:3389")));
+        assert!(!tcp_allows(subnet, to("10.0.0.5:3389")));
         let v6 = "### tuple ### allow tcp 3389 ::/0 any ::/0 in\n";
-        assert!(ufw_allows(v6, to("[::]:3389")));
-        assert!(ufw_allows(v6, to("[fd00::5]:3389")));
+        assert!(tcp_allows(v6, to("[::]:3389")));
+        assert!(tcp_allows(v6, to("[fd00::5]:3389")));
         let v6_host = "### tuple ### allow tcp 3389 fd00::5 any ::/0 in\n";
-        assert!(ufw_allows(v6_host, to("[fd00::5]:3389")));
-        assert!(!ufw_allows(v6_host, to("[fd00::6]:3389")));
+        assert!(tcp_allows(v6_host, to("[fd00::5]:3389")));
+        assert!(!tcp_allows(v6_host, to("[fd00::6]:3389")));
     }
 
     #[test]
@@ -774,7 +962,7 @@ mod tests {
         let any = "allow any any 0.0.0.0/0 any 192.168.1.0/24 in";
         let check = |first: &str, listen: &str| {
             let rules = format!("### tuple ### {first}\n### tuple ### {any}\n");
-            ufw_allows(&rules, listen.parse().unwrap())
+            tcp_allows(&rules, listen.parse().unwrap())
         };
         for deny in [
             "deny tcp 3389 0.0.0.0/0 any 0.0.0.0/0 in",
@@ -801,6 +989,6 @@ mod tests {
         let allow_first = format!(
             "### tuple ### {any}\n### tuple ### deny tcp 3389 0.0.0.0/0 any 0.0.0.0/0 in\n"
         );
-        assert!(ufw_allows(&allow_first, "0.0.0.0:3389".parse().unwrap()));
+        assert!(tcp_allows(&allow_first, "0.0.0.0:3389".parse().unwrap()));
     }
 }

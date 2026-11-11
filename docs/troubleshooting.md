@@ -10,9 +10,9 @@ journalctl --user -u wayshare -b
 ```
 
 Doctor checks the shared setup, the Apple listener and its firewall rule, the ufw
-rule for the RDP port, and the Apple High Performance encoder. It does not connect
-to the RDP listener. For that, check the startup log for `RDP listener ready` or
-`RDP disabled`.
+rules for the RDP and High Performance ports, and the Apple High Performance
+encoder. It does not connect to the RDP listener. For that, check the startup log
+for `RDP listener ready` or `RDP disabled`.
 
 To follow the log during a connection attempt, run:
 
@@ -104,6 +104,15 @@ On a tailnet, check UDP media access from wayshare to the Mac and feedback
 access back to wayshare. The default video and sound ports are 5960 and 5962.
 Doctor does not test this path. See [Ports](security.md#ports) for traffic
 directions, stateful return traffic, and the custom port setting.
+
+If High Performance sound starts about 5 seconds after video, look for
+`no initial audio RTCP; starting audio after readiness grace period`. wayshare
+waits for the Mac's first RTCP packet on `hp.port + 2` before it sends sound.
+Video can still work because wayshare sends video first and ufw lets the Mac's
+replies in. For sound, the Mac sends first. Without a UDP rule, ufw drops that
+packet and the kernel log shows `[UFW BLOCK]` with `PROTO=UDP` and `DPT=5962`
+for the default port. Run `wayshare doctor` to check the rule, and
+`wayshare setup` to add it.
 
 For missing sound, check the audio requirements on the High Performance page.
 RDP has no sound support.
