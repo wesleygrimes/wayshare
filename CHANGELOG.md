@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 - 2026-11-12
+
+### Features
+
+- With High Performance on, `wayshare setup` offers a ufw rule for UDP `hp.port` and `hp.port + 2` (5960 and 5962 by default). The rule names the interface when `listen` is bound to one and the LAN range otherwise, like the TCP 5900 rule. Without it, ufw drops the Mac's first audio RTCP packet and High Performance sound starts about 5 seconds late. `wayshare doctor` adds an `HP firewall` line that warns about missing UDP ports. ([#93](https://github.com/wesleygrimes/wayshare/pull/93))
+
+### Fixes
+
+- With `resize = true`, wayshare now switches a physical monitor only to sizes listed in its `availableModes`, at the closest listed refresh rate. For other sizes it keeps the current mode and the viewer scales the picture. An unlisted size could make a 1080p HDMI monitor lose signal and disconnect, which ended capture. Headless outputs still resize to any size. ([#92](https://github.com/wesleygrimes/wayshare/pull/92))
+- When the compositor stops the Standard mode capture session, wayshare keeps showing the last frame and tries to open a new session about every 500 ms until the output returns, then sends a full refresh. Before, it logged an error on every frame and sent no new frames until the viewer disconnected. ([#92](https://github.com/wesleygrimes/wayshare/pull/92))
+- Update `rustix` from 1.1.5 to 1.1.6 to address RUSTSEC-2026-0486, unsound handling of zero-length buffers in its extended-attribute functions. wayshare gets `rustix` through the Wayland client libraries.
+
+### Upgrade notes
+
+No configuration migration is required. If you use ufw with High Performance, rerun `wayshare setup` to add the UDP rule, or see [Ports](https://github.com/wesleygrimes/wayshare/blob/v0.4.0/docs/security.md#ports) to add it by hand. HDMI and DisplayPort dummy plugs count as physical monitors, so they now switch only to their listed modes. Use a headless output if you need arbitrary sizes.
+
+**Full changelog**: [v0.3.2...v0.4.0](https://github.com/wesleygrimes/wayshare/compare/v0.3.2...v0.4.0)
+
 ## 0.3.2 - 2026-11-07
 
 ### Fixes
