@@ -190,9 +190,9 @@ Used by:
 Apache License 2.0 (Apache-2.0)
 
 Used by:
-- wayshare 0.3.2
-- wayshare 0.3.2
-- wayshare 0.3.2
+- wayshare 0.4.0
+- wayshare 0.4.0
+- wayshare 0.4.0
 - cryptoki-sys 0.5.0
   Author: Contributors to the Parsec project
 - cryptoki 0.12.1
@@ -8784,7 +8784,7 @@ Used by:
 - rustcrypto-group 0.14.0-rc.1
   Author: Sean Bowe <ewillbefull@gmail.com>
   Author: Jack Grigg <jack@z.cash>
-- rustix 1.1.5
+- rustix 1.1.6
   Author: Dan Gohman <dev@sunfishcode.online>
   Author: Jakub Konka <kubkon@jakubkonka.com>
 - serde 1.0.229
